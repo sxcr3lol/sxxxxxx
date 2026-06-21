@@ -19,21 +19,21 @@ local state = {
     hostDetected = false,
     lastWeaponSwitchTime = 0,
     lastWeaponName = nil,
-    SpidermanCharacter = nil,
-    SpidermanHumanoid = nil,
-    SpidermanOriginalJumpPower = 0,
-    SpidermanFallStartTime = 0,
-    SpidermanWallRayParams = nil,
-    SpidermanJumpRequestConnection = nil,
+    WalljumpCharacter = nil,
+    WalljumpHumanoid = nil,
+    WalljumpOriginalJumpPower = 0,
+    WalljumpFallStartTime = 0,
+    WalljumpWallRayParams = nil,
+    WalljumpJumpRequestConnection = nil,
     PlayerHumanoid = nil,
     DefaultWalkSpeed = 16,
-    SpeedModEnabled = false,
     LastShootTime = 0,
     PanicActive = false,
     VelocityLockEnabled = true,
     LastVelocity = Vector3.new(0, 0, 0),
     PanicGroundConnection = nil,
     CurrentTarget = nil,
+    triggerKeyHeld = false,
 }
 
 local AllConnections = {}
@@ -109,19 +109,20 @@ local function IsGameSupported()
         [80567999110374] = true,
         [80973874602881] = true,
         [138995385694035] = true,
+        [75159825516372] = true,
     }
     if supportedIds[placeId] then return true end
     
     local success, productInfo = pcall(function() return MarketplaceService:GetProductInfo(placeId) end)
     if success then
         local name = productInfo.Name or ""
-        if name:find("Da Hood") or name:find("Hood Customs") or name:find("D4S H00DZ") then
+        if name:find("Da Hood") or name:find("Hood Customs") or name:find("D4S H00DZ") or name:find("Hood Customs Anarchy") or name:find("Hood Customs Free For All") then
             return true
         end
     end
     
     local gameNameStr = tostring(game)
-    if gameNameStr:find("Hood") or gameNameStr:find("Customs") or gameNameStr:find("Da Hood") then return true end
+    if gameNameStr:find("Hood") or gameNameStr:find("Customs") or gameNameStr:find("Da Hood") or gameNameStr:find("Anarchy") then return true end
     
     return false
 end
@@ -132,6 +133,37 @@ if not IsGameSupported() then
     LocalPlayer:Kick("This game is not supported, If you think this is a mistake please contact support.")
     return
 end
+
+local function IsHoodCustomsGame()
+    local placeId = game.PlaceId
+    local hoodIds = {
+        [9825515356] = true,
+        [80567999110374] = true,
+        [138995385694035] = true,
+    }
+    if hoodIds[placeId] then return true end
+    
+    local success, productInfo = pcall(function() return MarketplaceService:GetProductInfo(placeId) end)
+    if success then
+        local name = productInfo.Name or ""
+        if name:find("Hood Customs") or name:find("Hood Customs Anarchy") or name:find("Hood Customs Free For All") then
+            return true
+        end
+    end
+    
+    local gameNameStr = tostring(game)
+    if gameNameStr:find("Hood Customs") then return true end
+    
+    return false
+end
+
+local function IsNewGame()
+    local placeId = game.PlaceId
+    return placeId == 75159825516372
+end
+
+local isHoodCustoms = IsHoodCustomsGame()
+local isNewGame = IsNewGame()
 
 local function IsStealthEnabled()
     return shared.Scare and shared.Scare['Configuration']
@@ -151,16 +183,16 @@ local UserInputService = game:GetService("UserInputService")
 local CoreGui = game:GetService("CoreGui")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
-local function CleanupSpiderman()
-    if state.SpidermanJumpRequestConnection then
+local function CleanupWalljump()
+    if state.WalljumpJumpRequestConnection then
         pcall(function()
-            state.SpidermanJumpRequestConnection:Disconnect()
+            state.WalljumpJumpRequestConnection:Disconnect()
         end)
-        state.SpidermanJumpRequestConnection = nil
+        state.WalljumpJumpRequestConnection = nil
     end
-    state.SpidermanCharacter = nil
-    state.SpidermanHumanoid = nil
-    state.SpidermanFallStartTime = 0
+    state.WalljumpCharacter = nil
+    state.WalljumpHumanoid = nil
+    state.WalljumpFallStartTime = 0
 end
 
 local function FullCleanup()
@@ -216,17 +248,11 @@ local function FullCleanup()
     end
     AntiFallConnections = {}
     
-    CleanupSpiderman()
+    CleanupWalljump()
     
     if state.PanicGroundConnection then
         pcall(function() state.PanicGroundConnection:Disconnect() end)
         state.PanicGroundConnection = nil
-    end
-    
-    if state.PlayerHumanoid then
-        pcall(function()
-            state.PlayerHumanoid.WalkSpeed = 16
-        end)
     end
     
     for _, Drawing in pairs(MultiPartDrawings or {}) do
@@ -265,6 +291,7 @@ local function FullCleanup()
     state.shootDetectionEnabled = false
     state.lockedTarget = nil
     state.hostDetected = false
+    state.triggerKeyHeld = false
 end
 
 local LocalPlayer = Players.LocalPlayer
@@ -736,6 +763,31 @@ local function GetClosestPlayerToCursor(MaxRange, mode)
         local ScreenPos, OnScreen = Camera:WorldToViewportPoint(Root.Position)
         if not OnScreen or ScreenPos.Z <= 0 then continue end
         local Mag = (Vector2.new(ScreenPos.X, ScreenPos.Y) - MousePos).Magnitude
+        if Mag < BestDist then
+            BestDist = Mag
+            Closest = Plr
+        end
+    end
+    return Closest
+end
+
+local function GetClosestPlayerInFOV(MaxRange, mode)
+    local CamPos = Camera.CFrame.Position
+    local Closest, BestDist = nil, math.huge
+    local ViewportSize = Camera.ViewportSize
+    local ScreenCenter = Vector2.new(ViewportSize.X / 2, ViewportSize.Y / 2)
+    
+    for _, Plr in next, Players:GetPlayers() do
+        if not IsPlayerValid(Plr, mode) then continue end
+        local Root = Plr.Character and Plr.Character:FindFirstChild("HumanoidRootPart")
+        if not Root then continue end
+        if MaxRange and MaxRange < math.huge then
+            local Dist = (CamPos - Root.Position).Magnitude
+            if Dist > MaxRange then continue end
+        end
+        local ScreenPos, OnScreen = Camera:WorldToViewportPoint(Root.Position)
+        if not OnScreen or ScreenPos.Z <= 0 then continue end
+        local Mag = (Vector2.new(ScreenPos.X, ScreenPos.Y) - ScreenCenter).Magnitude
         if Mag < BestDist then
             BestDist = Mag
             Closest = Plr
@@ -1237,123 +1289,421 @@ for i = 1, 10 do
     PanelLabels[i] = L
 end
 
-local GunHandler = nil
-pcall(function()
-    GunHandler = require(ReplicatedStorage.Modules.GunHandler)
-end)
+if not isHoodCustoms and not isNewGame then
+    local GunHandler = nil
+    pcall(function()
+        GunHandler = require(ReplicatedStorage.Modules.GunHandler)
+    end)
 
-local OriginalGetAim = nil
-if GunHandler then
-    OriginalGetAim = GunHandler.getAim
+    local OriginalGetAim = nil
+    if GunHandler then
+        OriginalGetAim = GunHandler.getAim
+    end
+
+    if GunHandler and OriginalGetAim then
+        GunHandler.getAim = function(origin, range)
+            local Config = GetConfig()
+            local SilentCfg = Config and Config["Silent Aimbot"]
+            if not SilentCfg or not SilentCfg["Configuration"] or not SilentCfg["Configuration"]["Enabled"] then
+                return OriginalGetAim(origin, range)
+            end
+            
+            if not State.SilentTargetLocked then
+                return OriginalGetAim(origin, range)
+            end
+            
+            local Target = State.Targets.Silent
+            if not Target then
+                return OriginalGetAim(origin, range)
+            end
+            
+            if IsTargetDead(Target) then
+                State.Targets.Silent = nil
+                State.SilentTargetLocked = false
+                state.lastValidTarget = nil
+                return OriginalGetAim(origin, range)
+            end
+            
+            if not CheckConditionsExceptVisible(Target, "Silent Aimbot") then
+                state.lastValidTarget = Target
+                State.Targets.Silent = nil
+                return OriginalGetAim(origin, range)
+            end
+            
+            if not CheckConditions(Target, "Silent Aimbot") then
+                state.lastValidTarget = Target
+                State.Targets.Silent = nil
+                return OriginalGetAim(origin, range)
+            end
+            
+            local TargetChar = Target.Character
+            local TargetPos = nil
+            
+            local isClosestPoint = IsSilentHitpartClosestPoint()
+            
+            if isClosestPoint then
+                local result = getClosestPoint(TargetChar)
+                if result and result.Position then
+                    TargetPos = result.Position
+                end
+            end
+            
+            if not TargetPos then
+                local TargetHead = TargetChar:FindFirstChild("Head")
+                if TargetHead then
+                    TargetPos = TargetHead.Position
+                else
+                    local Root = TargetChar:FindFirstChild("HumanoidRootPart")
+                    if Root then
+                        TargetPos = Root.Position
+                    else
+                        return OriginalGetAim(origin, range)
+                    end
+                end
+            end
+            
+            local Distance = (TargetPos - origin).Magnitude
+            local MaxRange = SilentCfg["Configuration"]["Distance"] or 1500
+            
+            if Distance > MaxRange then
+                return OriginalGetAim(origin, range)
+            end
+            
+            local screenPos, onScreen = Camera:WorldToViewportPoint(TargetPos)
+            if not onScreen or screenPos.Z <= 0 then
+                return OriginalGetAim(origin, range)
+            end
+            
+            local mousePos = UserInputService:GetMouseLocation()
+            local deltaX = screenPos.X - mousePos.X
+            local deltaY = screenPos.Y - mousePos.Y
+            
+            local fovCfg = SilentCfg["FOV"] or {}
+            local fovEnabled = fovCfg["Configuration"] and fovCfg["Configuration"]["Enabled"]
+            if fovEnabled then
+                local fovSize = fovCfg["Configuration"]["Size"] or { X = 10, Y = 10, Z = 10 }
+                local viewportX, viewportY = Camera.ViewportSize.X, Camera.ViewportSize.Y
+                local camFov = Camera.FieldOfView
+                local rootPart = TargetChar:FindFirstChild("HumanoidRootPart")
+                local rootSize = rootPart and rootPart.Size.Y or 5
+                local scale = (rootSize * viewportY) / (screenPos.Z * 2) * 80 / camFov
+                local halfW = math.min((fovSize.X or 10) * scale, viewportX * 2) / 2
+                local halfH = math.min((fovSize.Y or 10) * scale, viewportY * 2) / 2
+                
+                if math.abs(deltaX) > halfW or math.abs(deltaY) > halfH then
+                    return OriginalGetAim(origin, range)
+                end
+            else
+                local circleCfg = SilentCfg["Circle"] or {}
+                local circleEnabled = circleCfg["Configuration"] and circleCfg["Configuration"]["Enabled"]
+                if circleEnabled then
+                    local radius = circleCfg["Configuration"]["Scale"] or 150
+                    if (deltaX * deltaX + deltaY * deltaY) > (radius * radius) then
+                        return OriginalGetAim(origin, range)
+                    end
+                end
+            end
+            
+            local dir = (TargetPos - origin)
+            return dir.Unit, math.min(dir.Magnitude, range or 200)
+        end
+    end
 end
 
-if GunHandler and OriginalGetAim then
-    GunHandler.getAim = function(origin, range)
-        local Config = GetConfig()
-        local SilentCfg = Config and Config["Silent Aimbot"]
-        if not SilentCfg or not SilentCfg["Configuration"] or not SilentCfg["Configuration"]["Enabled"] then
-            return OriginalGetAim(origin, range)
-        end
-        
-        if not State.SilentTargetLocked then
-            return OriginalGetAim(origin, range)
-        end
-        
-        local Target = State.Targets.Silent
-        if not Target then
-            return OriginalGetAim(origin, range)
-        end
-        
-        if IsTargetDead(Target) then
-            State.Targets.Silent = nil
-            State.SilentTargetLocked = false
-            state.lastValidTarget = nil
-            return OriginalGetAim(origin, range)
-        end
-        
-        if not CheckConditionsExceptVisible(Target, "Silent Aimbot") then
-            state.lastValidTarget = Target
-            State.Targets.Silent = nil
-            return OriginalGetAim(origin, range)
-        end
-        
-        if not CheckConditions(Target, "Silent Aimbot") then
-            state.lastValidTarget = Target
-            State.Targets.Silent = nil
-            return OriginalGetAim(origin, range)
-        end
-        
-        local TargetChar = Target.Character
-        local TargetPos = nil
-        
-        local isClosestPoint = IsSilentHitpartClosestPoint()
-        
-        if isClosestPoint then
-            local result = getClosestPoint(TargetChar)
-            if result and result.Position then
-                TargetPos = result.Position
-            end
-        end
-        
-        if not TargetPos then
-            local TargetHead = TargetChar:FindFirstChild("Head")
-            if TargetHead then
-                TargetPos = TargetHead.Position
-            else
-                local Root = TargetChar:FindFirstChild("HumanoidRootPart")
-                if Root then
-                    TargetPos = Root.Position
-                else
-                    return OriginalGetAim(origin, range)
+if isHoodCustoms then
+    local cachedTarget = nil
+    local lastMousePos = Vector2.new(0, 0)
+    
+    local function GetClosestPart(player)
+        local bestPart, bestDist = nil, math.huge
+        local Settings = GetConfig()
+        local SilentCfg = Settings and Settings["Silent Aimbot"]
+        local pointScale = SilentCfg and SilentCfg["Configuration"] and SilentCfg["Configuration"]["Point Configuration"] and SilentCfg["Configuration"]["Point Configuration"]["Point Scaling"] or 1.0
+        if player.Character then
+            for _, part in pairs(player.Character:GetDescendants()) do
+                if part:IsA("BasePart") and part.Transparency < 1 then
+                    local screenPos, onScreen = Camera:WorldToViewportPoint(part.Position)
+                    if onScreen then
+                        local partPos = Vector2.new(screenPos.X, screenPos.Y)
+                        local dist = (lastMousePos - partPos).Magnitude * pointScale
+                        if dist < bestDist then
+                            bestPart, bestDist = part, dist
+                        end
+                    end
                 end
             end
         end
+        return bestPart
+    end
+    
+    local function UpdateTarget()
+        lastMousePos = UserInputService:GetMouseLocation()
         
-        local Distance = (TargetPos - origin).Magnitude
-        local MaxRange = SilentCfg["Configuration"]["Distance"] or 1500
-        
-        if Distance > MaxRange then
-            return OriginalGetAim(origin, range)
+        local Settings = GetConfig()
+        local SilentCfg = Settings and Settings["Silent Aimbot"]
+        if not SilentCfg or not SilentCfg["Configuration"] or not SilentCfg["Configuration"]["Enabled"] then
+            cachedTarget = nil
+            return
         end
-        
-        local screenPos, onScreen = Camera:WorldToViewportPoint(TargetPos)
-        if not onScreen or screenPos.Z <= 0 then
-            return OriginalGetAim(origin, range)
-        end
-        
-        local mousePos = UserInputService:GetMouseLocation()
-        local deltaX = screenPos.X - mousePos.X
-        local deltaY = screenPos.Y - mousePos.Y
         
         local fovCfg = SilentCfg["FOV"] or {}
         local fovEnabled = fovCfg["Configuration"] and fovCfg["Configuration"]["Enabled"]
-        if fovEnabled then
-            local fovSize = fovCfg["Configuration"]["Size"] or { X = 10, Y = 10, Z = 10 }
-            local viewportX, viewportY = Camera.ViewportSize.X, Camera.ViewportSize.Y
-            local camFov = Camera.FieldOfView
-            local rootPart = TargetChar:FindFirstChild("HumanoidRootPart")
-            local rootSize = rootPart and rootPart.Size.Y or 5
-            local scale = (rootSize * viewportY) / (screenPos.Z * 2) * 80 / camFov
-            local halfW = math.min((fovSize.X or 10) * scale, viewportX * 2) / 2
-            local halfH = math.min((fovSize.Y or 10) * scale, viewportY * 2) / 2
-            
-            if math.abs(deltaX) > halfW or math.abs(deltaY) > halfH then
-                return OriginalGetAim(origin, range)
+        local fovSize = fovCfg["Configuration"] and fovCfg["Configuration"]["Size"] or { X = 5, Y = 5, Z = 5 }
+        local viewportX, viewportY = Camera.ViewportSize.X, Camera.ViewportSize.Y
+        local camFOV = Camera.FieldOfView
+        
+        local bestPart, bestDist = nil, math.huge
+        
+        for _, player in pairs(Players:GetPlayers()) do
+            if player ~= LocalPlayer and player.Character then
+                local part = nil
+                local isClosestPoint = IsSilentHitpartClosestPoint()
+                if isClosestPoint then
+                    part = GetClosestPart(player)
+                else
+                    part = player.Character:FindFirstChild(SilentCfg["Configuration"]["Target Zone"] or "HumanoidRootPart")
+                end
+                if part then
+                    local screenPos, onScreen = Camera:WorldToViewportPoint(part.Position)
+                    if onScreen then
+                        local partPos = Vector2.new(screenPos.X, screenPos.Y)
+                        local dist = (lastMousePos - partPos).Magnitude
+                        
+                        local radius = 1e9
+                        if fovEnabled then
+                            local rootPart = player.Character:FindFirstChild("HumanoidRootPart")
+                            local rootSize = rootPart and rootPart.Size.Y or 5
+                            local scale = (rootSize * viewportY) / (screenPos.Z * 2) * 80 / camFOV
+                            local halfW = math.min((fovSize.X or 10) * scale, viewportX * 2) / 2
+                            local halfH = math.min((fovSize.Y or 10) * scale, viewportY * 2) / 2
+                            radius = math.min(halfW, halfH)
+                        end
+                        
+                        if dist < bestDist and dist <= radius then
+                            bestPart, bestDist = part, dist
+                        end
+                    end
+                end
             end
-        else
-            local circleCfg = SilentCfg["Circle"] or {}
-            local circleEnabled = circleCfg["Configuration"] and circleCfg["Configuration"]["Enabled"]
-            if circleEnabled then
-                local radius = circleCfg["Configuration"]["Scale"] or 150
-                if (deltaX * deltaX + deltaY * deltaY) > (radius * radius) then
-                    return OriginalGetAim(origin, range)
+        end
+        cachedTarget = bestPart
+    end
+    
+    RunService.RenderStepped:Connect(UpdateTarget)
+    
+    local function ApplyPrediction(cf, offset)
+        return cf * CFrame.new(offset.X, offset.Y, offset.Z)
+    end
+    
+    local mt = getrawmetatable(game)
+    if mt then
+        setreadonly(mt, false)
+        local oldIndex = mt.__index
+        mt.__index = newcclosure(function(obj, prop)
+            if obj:IsA("Mouse") and (prop == "Hit" or prop == "Target") then
+                local target = cachedTarget
+                if target then
+                    local Settings = GetConfig()
+                    local SilentCfg = Settings and Settings["Silent Aimbot"]
+                    local prediction = { X = 0, Y = 0, Z = 0 }
+                    local redir = SilentCfg and SilentCfg["Client Redirection"] or {}
+                    local currentTool = (LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Tool")) or nil
+                    
+                    if redir["Configuration"] and redir["Configuration"]["Enabled"] and currentTool then
+                        local toolName = tostring(currentTool.Name)
+                        local predCfg = redir["Configuration"]["Prediction"] or { X = 0.035, Y = 0.035, Z = 0.035 }
+                        local weaponSpecific = redir["Configuration"]["Weapon Specific"] and redir["Configuration"]["Weapon Specific"]["Configuration"] or {}
+                        local weaponName = string.lower(toolName)
+                        if weaponSpecific["Rifle"] and (string.find(weaponName, "rifle") or string.find(weaponName, "ak") or string.find(weaponName, "m4")) then
+                            prediction = predCfg
+                        elseif weaponSpecific["Glock"] and string.find(weaponName, "glock") then
+                            prediction = predCfg
+                        elseif weaponSpecific["Revolver"] and string.find(weaponName, "revolver") then
+                            prediction = predCfg
+                        else
+                            prediction = predCfg
+                        end
+                    else
+                        local predCfg = SilentCfg and SilentCfg["Prediction"] and SilentCfg["Prediction"]["Configuration"] or {}
+                        if predCfg and predCfg["Enabled"] then
+                            prediction = { X = predCfg["X"] or 0, Y = predCfg["Y"] or 0, Z = predCfg["Z"] or 0 }
+                        end
+                    end
+                    
+                    local predMultiplier = Vector3.new(prediction.X or 0, prediction.Y or 0, prediction.Z or 0)
+                    local offset = target.Velocity * predMultiplier
+                    if prop == "Hit" then
+                        return ApplyPrediction(target.CFrame, offset)
+                    else
+                        return target
+                    end
+                end
+            end
+            return oldIndex(obj, prop)
+        end)
+    end
+    
+    RunService.Heartbeat:Connect(function()
+        local Settings = GetConfig()
+        local SilentCfg = Settings and Settings["Silent Aimbot"]
+        if not SilentCfg or not SilentCfg["Configuration"] or not SilentCfg["Configuration"]["Enabled"] then return end
+        local target = cachedTarget
+        local currentTool = LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Tool")
+        if target and currentTool and currentTool:FindFirstChild("Activate") then
+            currentTool:Activate()
+        end
+    end)
+end
+
+if isNewGame then
+    local cachedTarget = nil
+    local lastMousePos = Vector2.new(0, 0)
+    local closestPointScale = 0.4
+    local bots = workspace:FindFirstChild("Bots")
+    
+    local function GetClosestPoint(target, scale)
+        local char = target
+        local closestPoint = nil
+        local shortestDistance = math.huge
+        local mouseLoc = Vector2.new(lastMousePos.X, lastMousePos.Y)
+        
+        local parts = {
+            "Head", "UpperTorso", "LowerTorso", 
+            "LeftUpperArm", "LeftLowerArm", "LeftHand",
+            "RightUpperArm", "RightLowerArm", "RightHand",
+            "LeftUpperLeg", "LeftLowerLeg", "LeftFoot",
+            "RightUpperLeg", "RightLowerLeg", "RightFoot"
+        }
+
+        for _, partName in ipairs(parts) do
+            local part = char:FindFirstChild(partName)
+            if part then
+                local size = part.Size * scale
+                local subPoints = {
+                    part.Position,
+                    (part.CFrame * CFrame.new(0, size.Y/2, 0)).Position,
+                    (part.CFrame * CFrame.new(0, -size.Y/2, 0)).Position,
+                    (part.CFrame * CFrame.new(size.X/2, 0, 0)).Position,
+                    (part.CFrame * CFrame.new(-size.X/2, 0, 0)).Position,
+                }
+
+                for _, point in ipairs(subPoints) do
+                    local pos, onScreen = Camera:WorldToViewportPoint(point)
+                    if onScreen then
+                        local distance = (Vector2.new(pos.X, pos.Y) - mouseLoc).Magnitude
+                        if distance < shortestDistance then
+                            shortestDistance = distance
+                            closestPoint = point
+                        end
+                    end
                 end
             end
         end
         
-        local dir = (TargetPos - origin)
-        return dir.Unit, math.min(dir.Magnitude, range or 200)
+        return closestPoint or (char:FindFirstChild("HumanoidRootPart") and char.HumanoidRootPart.Position)
     end
+    
+    local function GetClosestBot()
+        local closestBot = nil
+        local shortestDistance = math.huge
+        local mouseLoc = Vector2.new(lastMousePos.X, lastMousePos.Y)
+
+        if not bots then return nil end
+        
+        for _, bot in ipairs(bots:GetChildren()) do
+            local char = bot
+            local root = char and char:FindFirstChild("HumanoidRootPart")
+            if root then
+                local pos, onScreen = Camera:WorldToViewportPoint(root.Position)
+                if onScreen then
+                    local distance = (Vector2.new(pos.X, pos.Y) - mouseLoc).Magnitude
+                    if distance < shortestDistance then
+                        shortestDistance = distance
+                        closestBot = bot
+                    end
+                end
+            end
+        end
+        return closestBot
+    end
+    
+    local function UpdateTarget()
+        lastMousePos = UserInputService:GetMouseLocation()
+        
+        local Settings = GetConfig()
+        local SilentCfg = Settings and Settings["Silent Aimbot"]
+        if not SilentCfg or not SilentCfg["Configuration"] or not SilentCfg["Configuration"]["Enabled"] then
+            cachedTarget = nil
+            return
+        end
+        
+        local fovCfg = SilentCfg["FOV"] or {}
+        local fovEnabled = fovCfg["Configuration"] and fovCfg["Configuration"]["Enabled"]
+        local fovSize = fovCfg["Configuration"] and fovCfg["Configuration"]["Size"] or { X = 5, Y = 5, Z = 5 }
+        local viewportX, viewportY = Camera.ViewportSize.X, Camera.ViewportSize.Y
+        local camFOV = Camera.FieldOfView
+        
+        local closestBot = GetClosestBot()
+        if closestBot then
+            local targetPos = GetClosestPoint(closestBot, closestPointScale)
+            if targetPos then
+                local screenPos, onScreen = Camera:WorldToViewportPoint(targetPos)
+                if onScreen then
+                    local dist = (Vector2.new(screenPos.X, screenPos.Y) - lastMousePos).Magnitude
+                    local radius = 1e9
+                    if fovEnabled then
+                        local rootPart = closestBot:FindFirstChild("HumanoidRootPart")
+                        local rootSize = rootPart and rootPart.Size.Y or 5
+                        local scale = (rootSize * viewportY) / (screenPos.Z * 2) * 80 / camFOV
+                        local halfW = math.min((fovSize.X or 10) * scale, viewportX * 2) / 2
+                        local halfH = math.min((fovSize.Y or 10) * scale, viewportY * 2) / 2
+                        radius = math.min(halfW, halfH)
+                    end
+                    if dist <= radius then
+                        cachedTarget = targetPos
+                    else
+                        cachedTarget = nil
+                    end
+                else
+                    cachedTarget = nil
+                end
+            else
+                cachedTarget = nil
+            end
+        else
+            cachedTarget = nil
+        end
+    end
+    
+    RunService.RenderStepped:Connect(UpdateTarget)
+    
+    local GunClient = nil
+    pcall(function()
+        GunClient = require(ReplicatedStorage.Modules.GunClient)
+    end)
+    
+    if GunClient and GunClient.Shoot then
+        local OriginalShoot = GunClient.Shoot
+        GunClient.Shoot = newcclosure(function(...)
+            local args = {...}
+            local Settings = GetConfig()
+            local SilentCfg = Settings and Settings["Silent Aimbot"]
+            if SilentCfg and SilentCfg["Configuration"] and SilentCfg["Configuration"]["Enabled"] and cachedTarget then
+                LocalPlayer:SetAttribute("MousePos", cachedTarget)
+            end
+            return OriginalShoot(table.unpack(args))
+        end)
+    end
+    
+    RunService.Heartbeat:Connect(function()
+        local Settings = GetConfig()
+        local SilentCfg = Settings and Settings["Silent Aimbot"]
+        if not SilentCfg or not SilentCfg["Configuration"] or not SilentCfg["Configuration"]["Enabled"] then return end
+        local currentTool = LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Tool")
+        if cachedTarget and currentTool and currentTool:FindFirstChild("Activate") then
+            currentTool:Activate()
+        end
+    end)
 end
 
 local function ValidateTarget(mode)
@@ -1362,8 +1712,7 @@ local function ValidateTarget(mode)
     
     local Target = State.Targets[mode]
     
-    if Target then
-        if IsTargetDead(Target) or not CheckConditionsExceptVisible(Target, mode) then
+    if Target then        if IsTargetDead(Target) or not CheckConditionsExceptVisible(Target, mode) then
             State.Targets[mode] = nil
             if mode == "Silent" then
                 State.SilentTargetLocked = false
@@ -1461,13 +1810,22 @@ local function HandleTriggerKey(input, processed)
     if SelMode == "Toggle" then
         State.TriggerTargetLocked = not State.TriggerTargetLocked
         if State.TriggerTargetLocked then
-            State.Targets.Trigger = GetClosestPlayerToCursor(MaxR, mode)
+            local SelSystem = GetTriggerSelectionSystem()
+            if SelSystem == "Automatic" then
+                State.Targets.Trigger = GetClosestPlayerInFOV(MaxR, mode)
+            else
+                State.Targets.Trigger = GetClosestPlayerToCursor(MaxR, mode)
+            end
             state.lastValidTarget = nil
             state.triggerLastValidTarget = nil
+            state.lastWeaponName = nil
+            state.lastWeaponSwitchTime = 0
         else
             State.Targets.Trigger = nil
             state.lastValidTarget = nil
             state.triggerLastValidTarget = nil
+            state.lastWeaponName = nil
+            state.lastWeaponSwitchTime = 0
             for _, Drawing in pairs(MultiPartDrawings or {}) do
                 if type(Drawing) == "table" then
                     for _, Line in pairs(Drawing or {}) do
@@ -1488,10 +1846,74 @@ local function HandleTriggerKey(input, processed)
             end
         end
     elseif SelMode == "Hold" then
+        state.triggerKeyHeld = true
         State.TriggerTargetLocked = true
-        State.Targets.Trigger = GetClosestPlayerToCursor(MaxR, mode)
+        local SelSystem = GetTriggerSelectionSystem()
+        if SelSystem == "Automatic" then
+            State.Targets.Trigger = GetClosestPlayerInFOV(MaxR, mode)
+        else
+            State.Targets.Trigger = GetClosestPlayerToCursor(MaxR, mode)
+        end
         state.lastValidTarget = nil
         state.triggerLastValidTarget = nil
+        state.lastWeaponName = nil
+        state.lastWeaponSwitchTime = 0
+    end
+end
+
+local function HandleTriggerKeyRelease(input)
+    local SelMode = GetTriggerSelectionMode()
+    if SelMode ~= "Hold" then
+        return
+    end
+    
+    local key = GetTriggerKeybind()
+    if not key then
+        return
+    end
+    
+    local match = false
+    pcall(function()
+        if input.KeyCode == Enum.KeyCode[key:upper()] then
+            match = true
+        end
+    end)
+    if not match then
+        pcall(function()
+            if input.UserInputType == Enum.UserInputType[key] then
+                match = true
+            end
+        end)
+    end
+    
+    if not match then
+        return
+    end
+    
+    state.triggerKeyHeld = false
+    State.TriggerTargetLocked = false
+    State.Targets.Trigger = nil
+    state.lastValidTarget = nil
+    state.triggerLastValidTarget = nil
+    state.lastWeaponName = nil
+    state.lastWeaponSwitchTime = 0
+    for _, Drawing in pairs(MultiPartDrawings or {}) do
+        if type(Drawing) == "table" then
+            for _, Line in pairs(Drawing or {}) do
+                if Line then
+                    Line.Visible = false
+                end
+            end
+        end
+    end
+    for _, Drawing in pairs(MultiPartOutlineDrawings or {}) do
+        if type(Drawing) == "table" then
+            for _, Line in pairs(Drawing or {}) do
+                if Line then
+                    Line.Visible = false
+                end
+            end
+        end
     end
 end
 
@@ -1534,6 +1956,8 @@ local function HandleShootDetectionKey(input, processed)
         State.TriggerTargetLocked = false
         State.Targets.Trigger = nil
         state.triggerLastValidTarget = nil
+        state.lastWeaponName = nil
+        state.lastWeaponSwitchTime = 0
     end
 end
 
@@ -1542,28 +1966,6 @@ UserInputService.InputBegan:Connect(function(input, processed)
     
     local Config = GetConfig()
     if not Config then return end
-    
-    local MovementCfg = Config['Movement Modifications']
-    if MovementCfg and MovementCfg['Configuration'] and MovementCfg['Configuration']['Enabled'] then
-        local Key = MovementCfg['Configuration']['Keybind']
-        if Key then
-            local Match = false
-            pcall(function()
-                if input.KeyCode == Enum.KeyCode[Key:upper()] then Match = true end
-            end)
-            if not Match then
-                pcall(function()
-                    if input.UserInputType == Enum.UserInputType[Key] then Match = true end
-                end)
-            end
-            if Match then
-                state.SpeedModEnabled = not state.SpeedModEnabled
-                if state.PlayerHumanoid then
-                    UpdateSpeed()
-                end
-            end
-        end
-    end
     
     local SilentCfg = Config and Config["Silent Aimbot"]
     if SilentCfg and SilentCfg["Configuration"] and SilentCfg["Configuration"]["Enabled"] then
@@ -1631,31 +2033,7 @@ UserInputService.InputEnded:Connect(function(input)
         state.lastValidTarget = nil
     end
     
-    local TriggerSelMode = GetTriggerSelectionMode()
-    if TriggerSelMode == "Hold" then
-        State.TriggerTargetLocked = false
-        State.Targets.Trigger = nil
-        state.lastValidTarget = nil
-        state.triggerLastValidTarget = nil
-        for _, Drawing in pairs(MultiPartDrawings or {}) do
-            if type(Drawing) == "table" then
-                for _, Line in pairs(Drawing or {}) do
-                    if Line then
-                        Line.Visible = false
-                    end
-                end
-            end
-        end
-        for _, Drawing in pairs(MultiPartOutlineDrawings or {}) do
-            if type(Drawing) == "table" then
-                for _, Line in pairs(Drawing or {}) do
-                    if Line then
-                        Line.Visible = false
-                    end
-                end
-            end
-        end
-    end
+    HandleTriggerKeyRelease(input)
 end)
 
 local function UpdateTriggerFOV()
@@ -1816,9 +2194,9 @@ local function UpdateESP()
 end
 
 local function GetSpiderJumpHeight()
-    local SpiderConfig = shared.Scare['Jump Modifications']['Configuration']['Spiderman']
+    local SpiderConfig = shared.Scare['Jump Modifications']['Configuration']['Walljump']
     if not SpiderConfig then return 50 end
-    local CurrentTool = state.SpidermanCharacter and state.SpidermanCharacter:FindFirstChildOfClass('Tool')
+    local CurrentTool = state.WalljumpCharacter and state.WalljumpCharacter:FindFirstChildOfClass('Tool')
     local IsHoldingKnife = CurrentTool and (CurrentTool.Name == '[Knife]' or string.lower(CurrentTool.Name):find('knife'))
     
     if IsHoldingKnife and SpiderConfig['KnifeJumpPower'] then
@@ -1830,58 +2208,58 @@ end
 
 local function CheckForNearbyWall(RootPart)
     if not RootPart then return false end
-    if not state.SpidermanWallRayParams then
-        state.SpidermanWallRayParams = RaycastParams.new()
-        state.SpidermanWallRayParams.FilterType = Enum.RaycastFilterType.Exclude
+    if not state.WalljumpWallRayParams then
+        state.WalljumpWallRayParams = RaycastParams.new()
+        state.WalljumpWallRayParams.FilterType = Enum.RaycastFilterType.Exclude
     end
-    if state.SpidermanCharacter then
-        state.SpidermanWallRayParams.FilterDescendantsInstances = {state.SpidermanCharacter}
+    if state.WalljumpCharacter then
+        state.WalljumpWallRayParams.FilterDescendantsInstances = {state.WalljumpCharacter}
     end
     local StartPos = RootPart.Position
     local RootCFrame = RootPart.CFrame
     local RayDirections = {RootCFrame.LookVector, -RootCFrame.LookVector, RootCFrame.RightVector, -RootCFrame.RightVector}
     for _, Direction in next, RayDirections do
-        if Workspace:Raycast(StartPos, Direction * 3, state.SpidermanWallRayParams) then
+        if Workspace:Raycast(StartPos, Direction * 3, state.WalljumpWallRayParams) then
             return true
         end
     end
     return false
 end
 
-local function SetupSpiderman(Character)
-    state.SpidermanCharacter = Character
-    state.SpidermanHumanoid = Character:FindFirstChildOfClass("Humanoid")
-    if not state.SpidermanHumanoid then return end
+local function SetupWalljump(Character)
+    state.WalljumpCharacter = Character
+    state.WalljumpHumanoid = Character:FindFirstChildOfClass("Humanoid")
+    if not state.WalljumpHumanoid then return end
     
-    state.SpidermanOriginalJumpPower = state.SpidermanHumanoid.JumpPower
+    state.WalljumpOriginalJumpPower = state.WalljumpHumanoid.JumpPower
     
-    if state.SpidermanJumpRequestConnection then
-        pcall(function() state.SpidermanJumpRequestConnection:Disconnect() end)
-        state.SpidermanJumpRequestConnection = nil
+    if state.WalljumpJumpRequestConnection then
+        pcall(function() state.WalljumpJumpRequestConnection:Disconnect() end)
+        state.WalljumpJumpRequestConnection = nil
     end
     
-    state.SpidermanJumpRequestConnection = UserInputService.JumpRequest:Connect(function()
-        if not state.SpidermanCharacter or not state.SpidermanCharacter.Parent then
-            if state.SpidermanJumpRequestConnection then
-                pcall(function() state.SpidermanJumpRequestConnection:Disconnect() end)
-                state.SpidermanJumpRequestConnection = nil
+    state.WalljumpJumpRequestConnection = UserInputService.JumpRequest:Connect(function()
+        if not state.WalljumpCharacter or not state.WalljumpCharacter.Parent then
+            if state.WalljumpJumpRequestConnection then
+                pcall(function() state.WalljumpJumpRequestConnection:Disconnect() end)
+                state.WalljumpJumpRequestConnection = nil
             end
             return
         end
-        local SpiderConfig = shared.Scare['Jump Modifications']['Configuration']['Spiderman']
+        local SpiderConfig = shared.Scare['Jump Modifications']['Configuration']['Walljump']
         if not SpiderConfig or not SpiderConfig['Enabled'] then
             return
         end
         
-        local RootPart = state.SpidermanCharacter:FindFirstChild('HumanoidRootPart')
+        local RootPart = state.WalljumpCharacter:FindFirstChild('HumanoidRootPart')
         if not RootPart then
             return
         end
         
-        if state.SpidermanHumanoid:GetState() ~= Enum.HumanoidStateType.Freefall then
+        if state.WalljumpHumanoid:GetState() ~= Enum.HumanoidStateType.Freefall then
             return
         end
-        if state.SpidermanFallStartTime == 0 or (tick() - state.SpidermanFallStartTime) < 0.2 then
+        if state.WalljumpFallStartTime == 0 or (tick() - state.WalljumpFallStartTime) < 0.2 then
             return
         end
         if not CheckForNearbyWall(RootPart) then
@@ -1889,28 +2267,28 @@ local function SetupSpiderman(Character)
         end
         
         local WallJumpHeight = GetSpiderJumpHeight()
-        state.SpidermanHumanoid.JumpPower = WallJumpHeight
-        state.SpidermanHumanoid:ChangeState(Enum.HumanoidStateType.Jumping)
+        state.WalljumpHumanoid.JumpPower = WallJumpHeight
+        state.WalljumpHumanoid:ChangeState(Enum.HumanoidStateType.Jumping)
         
         local ResetConnection
-        ResetConnection = state.SpidermanHumanoid.StateChanged:Connect(function(_, NewState)
+        ResetConnection = state.WalljumpHumanoid.StateChanged:Connect(function(_, NewState)
             if NewState == Enum.HumanoidStateType.Freefall or NewState == Enum.HumanoidStateType.Landed then
                 pcall(function() ResetConnection:Disconnect() end)
-                if state.SpidermanHumanoid then
-                    state.SpidermanHumanoid.JumpPower = state.SpidermanOriginalJumpPower
+                if state.WalljumpHumanoid then
+                    state.WalljumpHumanoid.JumpPower = state.WalljumpOriginalJumpPower
                 end
             end
         end)
         table.insert(NoJumpCooldownConnections, ResetConnection)
     end)
-    table.insert(NoJumpCooldownConnections, state.SpidermanJumpRequestConnection)
+    table.insert(NoJumpCooldownConnections, state.WalljumpJumpRequestConnection)
     
-    if state.SpidermanHumanoid then
-        local StateConnection = state.SpidermanHumanoid.StateChanged:Connect(function(_, NewState)
+    if state.WalljumpHumanoid then
+        local StateConnection = state.WalljumpHumanoid.StateChanged:Connect(function(_, NewState)
             if NewState == Enum.HumanoidStateType.Freefall then
-                state.SpidermanFallStartTime = tick()
+                state.WalljumpFallStartTime = tick()
             elseif NewState == Enum.HumanoidStateType.Landed or NewState == Enum.HumanoidStateType.Running then
-                state.SpidermanFallStartTime = 0
+                state.WalljumpFallStartTime = 0
             end
         end)
         table.insert(NoJumpCooldownConnections, StateConnection)
@@ -2005,231 +2383,6 @@ local function IsPlayerShooting()
     return false
 end
 
-local function GetCurrentState()
-    local WeaponName = GetCurrentWeaponNameMovement()
-    if WeaponName then
-        local MovementCfg = shared.Scare['Movement Modifications']['Configuration']
-        if MovementCfg and MovementCfg[WeaponName] and MovementCfg[WeaponName]['Multiplier'] then
-            return WeaponName
-        end
-    end
-    if IsHoldingKnife() then
-        return "Knife"
-    end
-    if IsPlayerShooting() then
-        return "Shooting"
-    end
-    if IsPlayerReloading() then
-        return "Reloading"
-    end
-    local Status = GetHealthStatus()
-    if Status == "Low Health" then
-        return "Low Health"
-    end
-    return "Normal"
-end
-
-local function UpdateSpeed()
-    if not state.PlayerHumanoid then
-        return
-    end
-    
-    local ScareConfig = shared.Scare
-    if not ScareConfig then
-        return
-    end
-    
-    local MovementSettings = ScareConfig['Movement Modifications']
-    if not MovementSettings then
-        return
-    end
-    
-    local MovementCfg = MovementSettings['Configuration']
-    if not MovementCfg then
-        return
-    end
-    
-    if state.SpeedModEnabled and MovementCfg['Enabled'] then
-        local CurrentState = GetCurrentState()
-        local Multiplier = 1
-        local StateConfig = MovementCfg[CurrentState]
-        if StateConfig and StateConfig['Multiplier'] then
-            Multiplier = type(StateConfig['Multiplier']) == 'table' and StateConfig['Multiplier'][1] or StateConfig['Multiplier']
-        elseif CurrentState == "Normal" then
-            local NormalCfg = MovementCfg['Normal']
-            if NormalCfg then
-                Multiplier = type(NormalCfg['Multiplier']) == 'table' and NormalCfg['Multiplier'][1] or NormalCfg['Multiplier']
-            end
-        elseif CurrentState == "Knife" then
-            local KnifeCfg = MovementCfg['Knife']
-            if KnifeCfg then
-                Multiplier = type(KnifeCfg['Multiplier']) == 'table' and KnifeCfg['Multiplier'][1] or KnifeCfg['Multiplier']
-            end
-        elseif CurrentState == "Shooting" then
-            local ShootingCfg = MovementCfg['Shooting']
-            if ShootingCfg then
-                Multiplier = type(ShootingCfg['Multiplier']) == 'table' and ShootingCfg['Multiplier'][1] or ShootingCfg['Multiplier']
-            end
-        elseif CurrentState == "Reloading" then
-            local ReloadingCfg = MovementCfg['Reloading']
-            if ReloadingCfg then
-                Multiplier = type(ReloadingCfg['Multiplier']) == 'table' and ReloadingCfg['Multiplier'][1] or ReloadingCfg['Multiplier']
-            end
-        elseif CurrentState == "Low Health" then
-            local LowHealthCfg = MovementCfg['Low Health']
-            if LowHealthCfg then
-                Multiplier = type(LowHealthCfg['Multiplier']) == 'table' and LowHealthCfg['Multiplier'][1] or LowHealthCfg['Multiplier']
-            end
-        end
-        
-        local NewSpeed = 16 * Multiplier
-        if state.PlayerHumanoid.WalkSpeed ~= NewSpeed then
-            state.PlayerHumanoid.WalkSpeed = NewSpeed
-        end
-    else
-        if state.PlayerHumanoid.WalkSpeed ~= 16 and state.PlayerHumanoid.WalkSpeed ~= 0 then
-            state.PlayerHumanoid.WalkSpeed = 16
-        end
-    end
-end
-
-local function SetupPanicGround(Character)
-    if not Character then return end
-    local RootPart = Character:FindFirstChild('HumanoidRootPart')
-    if not RootPart then return end
-    if state.PanicGroundConnection then
-        pcall(function() state.PanicGroundConnection:Disconnect() end)
-        state.PanicGroundConnection = nil
-    end
-    local JumpCfg = shared.Scare['Jump Modifications']['Configuration']
-    local PanicCfg = JumpCfg['Panic Ground']
-    if not PanicCfg or not PanicCfg['Enabled'] then return end
-    local PanicKey = PanicCfg['Keybind'] or 'G'
-    local PanicKeyCode = Enum.KeyCode[PanicKey]
-    local PANIC_DISTANCE = 1000
-    
-    local function GetNearestGroundBelow()
-        local RaycastParams = RaycastParams.new()
-        RaycastParams.FilterDescendantsInstances = {Character}
-        RaycastParams.FilterType = Enum.RaycastFilterType.Blacklist
-        local Result = Workspace:Raycast(RootPart.Position, Vector3.new(0, -PANIC_DISTANCE, 0), RaycastParams)
-        if Result then
-            return Result.Position.Y + 3
-        end
-        return RootPart.Position.Y - 10
-    end
-    
-    local JumpRequestConnection = UserInputService.JumpRequest:Connect(function()
-        if state.PanicActive then
-            return
-        end
-    end)
-    table.insert(NoJumpCooldownConnections, JumpRequestConnection)
-    
-    state.PanicGroundConnection = UserInputService.InputBegan:Connect(function(input, GameProcessed)
-        if GameProcessed then return end
-        if PanicKeyCode and input.KeyCode == PanicKeyCode then
-            state.PanicActive = true
-            state.VelocityLockEnabled = false
-            local GroundY = GetNearestGroundBelow()
-            local NewPosition = Vector3.new(RootPart.Position.X, GroundY, RootPart.Position.Z)
-            RootPart.CFrame = CFrame.new(NewPosition)
-            RootPart.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
-            RootPart.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
-            if state.PlayerHumanoid then
-                state.PlayerHumanoid:ChangeState(Enum.HumanoidStateType.Landed)
-            end
-            task.wait(0.1)
-            state.PanicActive = false
-            state.VelocityLockEnabled = true
-        end
-    end)
-    table.insert(AllConnections, state.PanicGroundConnection)
-end
-
-local DaHoodPlaceId = {
-    [2788229376] = true,
-}
-
-if DaHoodPlaceId[game.PlaceId] then
-    local function AddConnection(conn)
-        table.insert(AllConnections, conn)
-    end
-    
-    RunService.RenderStepped:Connect(function()
-        if not state.VelocityLockEnabled then
-            return
-        end
-        local Character = LocalPlayer.Character
-        if not Character then
-            return
-        end
-        local Humanoid = Character:FindFirstChild('Humanoid')
-        local RootPart = Character:FindFirstChild('HumanoidRootPart')
-        if not Humanoid or not RootPart then
-            return
-        end
-        if Humanoid.Health <= 0 then
-            return
-        end
-        if RootPart.AssemblyLinearVelocity.Magnitude < 10 and state.LastVelocity.Magnitude > 100 then
-            RootPart.AssemblyLinearVelocity = state.LastVelocity
-        end
-        state.LastVelocity = RootPart.AssemblyLinearVelocity
-    end)
-
-    AddConnection(UserInputService.InputBegan:Connect(function(Input, GameProcessed)
-        if GameProcessed then
-            return
-        end
-        if Input.KeyCode == Enum.KeyCode.LeftControl or Input.KeyCode == Enum.KeyCode.RightControl then
-            state.VelocityLockEnabled = false
-        end
-    end))
-
-    AddConnection(UserInputService.InputEnded:Connect(function(Input, GameProcessed)
-        if GameProcessed then
-            return
-        end
-        if Input.KeyCode == Enum.KeyCode.LeftControl or Input.KeyCode == Enum.KeyCode.RightControl then
-            state.VelocityLockEnabled = true
-        end
-    end))
-end
-
-local function AntiFall(Character)
-    local JumpCfg = shared.Scare['Jump Modifications']['Configuration']
-    if not JumpCfg['AntiFall'] then return end
-    if not Character then return end
-    
-    local Humanoid = Character:FindFirstChildOfClass('Humanoid')
-    if not Humanoid then return end
-    
-    local Connection = Humanoid.StateChanged:Connect(function(_, NewState)
-        if NewState == Enum.HumanoidStateType.FallingDown or NewState == Enum.HumanoidStateType.Ragdoll then
-            Humanoid:ChangeState(Enum.HumanoidStateType.GettingUp)
-        end
-    end)
-    table.insert(AntiFallConnections, Connection)
-end
-
-local function NoJumpCooldown(Character)
-    if not Character then return end
-    local Humanoid = Character:FindFirstChildOfClass('Humanoid')
-    if not Humanoid then return end
-    
-    local JumpCfg = shared.Scare['Jump Modifications']['Configuration']
-    if not JumpCfg['No Jump Cooldown'] then return end
-    
-    local DefaultJumpPower = Humanoid.JumpPower
-    local Connection = Humanoid:GetPropertyChangedSignal('JumpPower'):Connect(function()
-        if Humanoid.JumpPower == 0 then
-            Humanoid.JumpPower = DefaultJumpPower
-        end
-    end)
-    table.insert(NoJumpCooldownConnections, Connection)
-end
-
 local function UpdatePanel()
     local Config = GetConfig()
     if not Config then
@@ -2310,15 +2463,6 @@ local function UpdatePanel()
             end
         end
         
-        if state.PlayerHumanoid then
-            local ws = state.PlayerHumanoid.WalkSpeed
-            if state.SpeedModEnabled and ws and ws > 16 then
-                walkSpeedStatus = "Active"
-            else
-                walkSpeedStatus = "N/A"
-            end
-        end
-        
         local BaseX, BaseY
         
         if isTargetLocked and StatusEnabled then
@@ -2393,10 +2537,9 @@ local function UpdatePanel()
             LabelIdx = LabelIdx + 1
             local L = PanelLabels[LabelIdx]
             if L then
-                L.Text = string.format('WalkSpeed <font color="rgb(%d,%d,%d)">:</font> <font color="rgb(%d,%d,%d)">(%s)</font>',
+                L.Text = string.format('WalkSpeed <font color="rgb(%d,%d,%d)">:</font> <font color="rgb(%d,%d,%d)">(N/A)</font>',
                     math.floor(FC.R*255), math.floor(FC.G*255), math.floor(FC.B*255),
-                    math.floor(CurrentColor.R*255), math.floor(CurrentColor.G*255), math.floor(CurrentColor.B*255),
-                    walkSpeedStatus)
+                    math.floor(CurrentColor.R*255), math.floor(CurrentColor.G*255), math.floor(CurrentColor.B*255))
                 L.Color = Color3.new(1,1,1)
                 L.Size = 14
                 L.Position = Vector2.new(BaseX, OffsetY)
@@ -2501,6 +2644,54 @@ local function IsInTriggerFOV(Player)
     end
 end
 
+local function GetTriggerCooldown()
+    local Config = GetConfig()
+    if not Config then return 0.01 end
+    
+    local TriggerCfg = Config["Trigger Bot"]
+    if not TriggerCfg then return 0.01 end
+    
+    local FOVCfg = TriggerCfg["FOV"] or {}
+    local CooldownValue = FOVCfg["Click Cooldown"]
+    
+    if type(CooldownValue) == "table" then
+        local Character = LocalPlayer.Character
+        if not Character then return 0.01 end
+        
+        local Tool = Character:FindFirstChildOfClass("Tool")
+        if not Tool then return 0.01 end
+        
+        local WeaponName = Tool.Name
+        
+        for Key, Value in pairs(CooldownValue) do
+            if Key == WeaponName then
+                return Value
+            end
+        end
+        
+        return 0.01
+    end
+    
+    return CooldownValue or 0.01
+end
+
+local function GetWeaponSwitchDelay()
+    local Config = GetConfig()
+    if not Config then return 0 end
+    
+    local TriggerCfg = Config["Trigger Bot"]
+    if not TriggerCfg then return 0 end
+    
+    local WSCfg = TriggerCfg["Weapon Switching"] or {}
+    local WSConfig = WSCfg["Configuration"] or {}
+    
+    if not WSConfig["Enabled"] then
+        return 0
+    end
+    
+    return WSConfig["Delay"] or 2.15
+end
+
 local function UpdateTriggerBot()
     local Config = GetConfig()
     local TriggerCfg = Config and Config["Trigger Bot"]
@@ -2547,7 +2738,25 @@ local function UpdateTriggerBot()
     end
     
     local CurrentTime = tick()
-    local Cooldown = TriggerCfg["FOV"]["Click Cooldown"] or 0.01
+    local CurrentWeapon = Tool.Name
+    
+    if state.lastWeaponName ~= CurrentWeapon then
+        local Delay = GetWeaponSwitchDelay()
+        if Delay > 0 then
+            state.lastWeaponSwitchTime = CurrentTime
+            state.lastWeaponName = CurrentWeapon
+            return
+        end
+        state.lastWeaponName = CurrentWeapon
+    end
+    
+    local Cooldown = GetTriggerCooldown()
+    local WeaponDelay = GetWeaponSwitchDelay()
+    local TimeSinceWeaponSwitch = CurrentTime - state.lastWeaponSwitchTime
+    
+    if WeaponDelay > 0 and TimeSinceWeaponSwitch < WeaponDelay then
+        return
+    end
     
     if CurrentTime - state.lastAttackTime >= Cooldown then
         pcall(function()
@@ -2581,6 +2790,8 @@ local function SetupShootDetection()
                         State.Targets.Trigger = state.lockedTarget
                         state.triggerLastValidTarget = nil
                         state.lastAttackTime = 0
+                        state.lastWeaponName = nil
+                        state.lastWeaponSwitchTime = 0
                     end
                 end
             end
@@ -2619,8 +2830,27 @@ RunService.PreRender:Connect(function()
                             local Tool = Character:FindFirstChildOfClass("Tool")
                             if Tool and Tool.Name ~= "[Knife]" then
                                 local CurrentTime = tick()
-                                local ClickCooldown = SDCfg['Configuration']['Click Cooldown'] or 0.01
-                                if CurrentTime - state.lastAttackTime >= ClickCooldown then
+                                local CurrentWeapon = Tool.Name
+                                
+                                if state.lastWeaponName ~= CurrentWeapon then
+                                    local Delay = GetWeaponSwitchDelay()
+                                    if Delay > 0 then
+                                        state.lastWeaponSwitchTime = CurrentTime
+                                        state.lastWeaponName = CurrentWeapon
+                                        return
+                                    end
+                                    state.lastWeaponName = CurrentWeapon
+                                end
+                                
+                                local Cooldown = GetTriggerCooldown()
+                                local WeaponDelay = GetWeaponSwitchDelay()
+                                local TimeSinceWeaponSwitch = CurrentTime - state.lastWeaponSwitchTime
+                                
+                                if WeaponDelay > 0 and TimeSinceWeaponSwitch < WeaponDelay then
+                                    return
+                                end
+                                
+                                if CurrentTime - state.lastAttackTime >= Cooldown then
                                     pcall(function()
                                         Tool:Activate()
                                     end)
@@ -2634,13 +2864,23 @@ RunService.PreRender:Connect(function()
         end
     end
     
+    if State.TriggerTargetLocked and GetTriggerSelectionSystem() == "Automatic" then
+        local MaxR = GetConfig() and GetConfig()["Trigger Bot"] and GetConfig()["Trigger Bot"]["Configuration"] and GetConfig()["Trigger Bot"]["Configuration"]["Distance"] or 1500
+        local CurrentTarget = State.Targets.Trigger
+        local NewTarget = GetClosestPlayerInFOV(MaxR, "Trigger")
+        
+        if NewTarget and NewTarget ~= CurrentTarget then
+            State.Targets.Trigger = NewTarget
+            state.triggerLastValidTarget = nil
+        end
+    end
+    
     UpdateSilentFOV()
     UpdateTriggerFOV()
     UpdateESP()
     UpdatePanel()
     UpdateMultiPartVisuals()
     UpdateTriggerBot()
-    UpdateSpeed()
 end)
 
 SetupShootDetection()
@@ -2662,27 +2902,108 @@ Players.PlayerRemoving:Connect(function(Plr)
     end
 end)
 
-local function SetupMovementFeatures()
+local function SetupPanicGround(Character)
+    if not Character then return end
+    local RootPart = Character:FindFirstChild('HumanoidRootPart')
+    if not RootPart then return end
+    if state.PanicGroundConnection then
+        pcall(function() state.PanicGroundConnection:Disconnect() end)
+        state.PanicGroundConnection = nil
+    end
+    local JumpCfg = shared.Scare['Jump Modifications']['Configuration']
+    local PanicCfg = JumpCfg['Panic Ground']
+    if not PanicCfg or not PanicCfg['Enabled'] then return end
+    local PanicKey = PanicCfg['Keybind'] or 'G'
+    local PanicKeyCode = Enum.KeyCode[PanicKey]
+    local PANIC_DISTANCE = 1000
+    
+    local function GetNearestGroundBelow()
+        local RaycastParams = RaycastParams.new()
+        RaycastParams.FilterDescendantsInstances = {Character}
+        RaycastParams.FilterType = Enum.RaycastFilterType.Blacklist
+        local Result = Workspace:Raycast(RootPart.Position, Vector3.new(0, -PANIC_DISTANCE, 0), RaycastParams)
+        if Result then
+            return Result.Position.Y + 3
+        end
+        return RootPart.Position.Y - 10
+    end
+    
+    local JumpRequestConnection = UserInputService.JumpRequest:Connect(function()
+        if state.PanicActive then
+            return
+        end
+    end)
+    table.insert(NoJumpCooldownConnections, JumpRequestConnection)
+    
+    state.PanicGroundConnection = UserInputService.InputBegan:Connect(function(input, GameProcessed)
+        if GameProcessed then return end
+        if PanicKeyCode and input.KeyCode == PanicKeyCode then
+            state.PanicActive = true
+            state.VelocityLockEnabled = false
+            local GroundY = GetNearestGroundBelow()
+            local NewPosition = Vector3.new(RootPart.Position.X, GroundY, RootPart.Position.Z)
+            RootPart.CFrame = CFrame.new(NewPosition)
+            RootPart.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+            RootPart.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
+            local Humanoid = Character:FindFirstChildOfClass("Humanoid")
+            if Humanoid then
+                Humanoid:ChangeState(Enum.HumanoidStateType.Landed)
+            end
+            task.wait(0.1)
+            state.PanicActive = false
+            state.VelocityLockEnabled = true
+        end
+    end)
+    table.insert(AllConnections, state.PanicGroundConnection)
+end
+
+local function AntiFall(Character)
+    local JumpCfg = shared.Scare['Jump Modifications']['Configuration']
+    if not JumpCfg or not JumpCfg['AntiFall'] then return end
+    if not Character then return end
+    
+    local Humanoid = Character:FindFirstChildOfClass('Humanoid')
+    if not Humanoid then return end
+    
+    local Connection = Humanoid.StateChanged:Connect(function(_, NewState)
+        if NewState == Enum.HumanoidStateType.FallingDown or NewState == Enum.HumanoidStateType.Ragdoll then
+            Humanoid:ChangeState(Enum.HumanoidStateType.GettingUp)
+        end
+    end)
+    table.insert(AntiFallConnections, Connection)
+end
+
+local function NoJumpCooldown(Character)
+    if not Character then return end
+    local Humanoid = Character:FindFirstChildOfClass('Humanoid')
+    if not Humanoid then return end
+    
+    local JumpCfg = shared.Scare['Jump Modifications']['Configuration']
+    if not JumpCfg or not JumpCfg['No Jump Cooldown'] then return end
+    
+    local DefaultJumpPower = Humanoid.JumpPower
+    local Connection = Humanoid:GetPropertyChangedSignal('JumpPower'):Connect(function()
+        if Humanoid.JumpPower == 0 then
+            Humanoid.JumpPower = DefaultJumpPower
+        end
+    end)
+    table.insert(NoJumpCooldownConnections, Connection)
+end
+
+local function SetupJumpFeatures()
     local Character = LocalPlayer.Character
     if not Character then return end
     
-    state.PlayerHumanoid = Character:FindFirstChildOfClass("Humanoid")
-    if state.PlayerHumanoid then
+    local Humanoid = Character:FindFirstChildOfClass("Humanoid")
+    if Humanoid then
+        state.PlayerHumanoid = Humanoid
         state.DefaultWalkSpeed = 16
-    end
-    
-    local ScareConfig = shared.Scare
-    if ScareConfig then
-        local MovementCfg = ScareConfig['Movement Modifications']
-        if MovementCfg and MovementCfg['Configuration'] then
-            state.SpeedModEnabled = false
-        end
     end
     
     local JumpCfg = shared.Scare and shared.Scare['Jump Modifications'] and shared.Scare['Jump Modifications']['Configuration']
     if JumpCfg then
-        if JumpCfg['Spiderman'] and JumpCfg['Spiderman']['Enabled'] then
-            SetupSpiderman(Character)
+        if JumpCfg['Walljump'] and JumpCfg['Walljump']['Enabled'] then
+            SetupWalljump(Character)
         end
         
         if JumpCfg['Panic Ground'] and JumpCfg['Panic Ground']['Enabled'] then
@@ -2699,8 +3020,58 @@ local function SetupMovementFeatures()
     end
 end
 
+local DaHoodPlaceId = {
+    [2788229376] = true,
+}
+
+if DaHoodPlaceId[game.PlaceId] then
+    local function AddConnection(conn)
+        table.insert(AllConnections, conn)
+    end
+    
+    RunService.RenderStepped:Connect(function()
+        if not state.VelocityLockEnabled then
+            return
+        end
+        local Character = LocalPlayer.Character
+        if not Character then
+            return
+        end
+        local Humanoid = Character:FindFirstChild('Humanoid')
+        local RootPart = Character:FindFirstChild('HumanoidRootPart')
+        if not Humanoid or not RootPart then
+            return
+        end
+        if Humanoid.Health <= 0 then
+            return
+        end
+        if RootPart.AssemblyLinearVelocity.Magnitude < 10 and state.LastVelocity.Magnitude > 100 then
+            RootPart.AssemblyLinearVelocity = state.LastVelocity
+        end
+        state.LastVelocity = RootPart.AssemblyLinearVelocity
+    end)
+
+    AddConnection(UserInputService.InputBegan:Connect(function(Input, GameProcessed)
+        if GameProcessed then
+            return
+        end
+        if Input.KeyCode == Enum.KeyCode.LeftControl or Input.KeyCode == Enum.KeyCode.RightControl then
+            state.VelocityLockEnabled = false
+        end
+    end))
+
+    AddConnection(UserInputService.InputEnded:Connect(function(Input, GameProcessed)
+        if GameProcessed then
+            return
+        end
+        if Input.KeyCode == Enum.KeyCode.LeftControl or Input.KeyCode == Enum.KeyCode.RightControl then
+            state.VelocityLockEnabled = true
+        end
+    end))
+end
+
 local function SetupCharacter(Character)
-    SetupMovementFeatures()
+    SetupJumpFeatures()
 end
 
 if LocalPlayer.Character then
@@ -2708,7 +3079,7 @@ if LocalPlayer.Character then
 end
 
 LocalPlayer.CharacterAdded:Connect(function(Character)
-    CleanupSpiderman()
+    CleanupWalljump()
     if state.PanicGroundConnection then
         pcall(function() state.PanicGroundConnection:Disconnect() end)
         state.PanicGroundConnection = nil
