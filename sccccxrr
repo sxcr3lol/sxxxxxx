@@ -110,7 +110,7 @@ local function IsGameSupported()
         [2788229376] = true,
         [9825515356] = true,
         [80567999110374] = true,
-        [80973874602881] = true,
+        [98018149468915] = true,
         [138995385694035] = true,
     }
     if supportedIds[placeId] then return true end
