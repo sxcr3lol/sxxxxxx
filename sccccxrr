@@ -41,6 +41,12 @@ local state = {
     isFirstPerson = false,
     mouseLockActive = false,
     lastMousePosition = nil,
+    walljumpCount = 0,
+    walljumpMaxCount = 3,
+    walljumpCooldown = 0,
+    walljumpLastJumpTime = 0,
+    walljumpResetConnection = nil,
+    walljumpStateConnection = nil,
 }
 
 local AllConnections = {}
@@ -193,9 +199,23 @@ local function CleanupWalljump()
         end)
         state.WalljumpJumpRequestConnection = nil
     end
+    if state.walljumpStateConnection then
+        pcall(function()
+            state.walljumpStateConnection:Disconnect()
+        end)
+        state.walljumpStateConnection = nil
+    end
+    if state.walljumpResetConnection then
+        pcall(function()
+            state.walljumpResetConnection:Disconnect()
+        end)
+        state.walljumpResetConnection = nil
+    end
     state.WalljumpCharacter = nil
     state.WalljumpHumanoid = nil
     state.WalljumpFallStartTime = 0
+    state.walljumpCount = 0
+    state.walljumpLastJumpTime = 0
 end
 
 local function FullCleanup()
@@ -2334,17 +2354,24 @@ local function UpdateESP()
     end
 end
 
-local function GetSpiderJumpHeight()
-    local SpiderConfig = shared.Scare['Jump Modifications']['Configuration']['Walljump']
-    if not SpiderConfig then return 50 end
+local function GetWalljumpJumpPower()
+    local WalljumpConfig = shared.Scare['Jump Modifications']['Configuration']['Walljump']
+    if not WalljumpConfig then return 50 end
     local CurrentTool = state.WalljumpCharacter and state.WalljumpCharacter:FindFirstChildOfClass('Tool')
     local IsHoldingKnife = CurrentTool and (CurrentTool.Name == '[Knife]' or string.lower(CurrentTool.Name):find('knife'))
     
-    if IsHoldingKnife and SpiderConfig['KnifeJumpPower'] then
-        return SpiderConfig['KnifeJumpPower']
+    if IsHoldingKnife and WalljumpConfig['Knife'] then
+        return WalljumpConfig['Knife']
     end
     
-    return SpiderConfig['JumpPower'] or 50
+    return WalljumpConfig['Jump'] or 50
+end
+
+local function GetWalljumpMaxCount()
+    local WalljumpConfig = shared.Scare['Jump Modifications']['Configuration']['Walljump']
+    if not WalljumpConfig then return 3
+    end
+    return WalljumpConfig['Amount'] or 3
 end
 
 local function CheckForNearbyWall(RootPart)
@@ -2367,12 +2394,39 @@ local function CheckForNearbyWall(RootPart)
     return false
 end
 
+local function ResetWalljumpCount()
+    state.walljumpCount = 0
+    state.walljumpLastJumpTime = 0
+end
+
 local function SetupWalljump(Character)
+    CleanupWalljump()
+    
     state.WalljumpCharacter = Character
     state.WalljumpHumanoid = Character:FindFirstChildOfClass("Humanoid")
     if not state.WalljumpHumanoid then return end
     
     state.WalljumpOriginalJumpPower = state.WalljumpHumanoid.JumpPower
+    state.walljumpMaxCount = GetWalljumpMaxCount()
+    state.walljumpCount = 0
+    state.walljumpLastJumpTime = 0
+    
+    if state.walljumpStateConnection then
+        pcall(function() state.walljumpStateConnection:Disconnect() end)
+        state.walljumpStateConnection = nil
+    end
+    
+    state.walljumpStateConnection = state.WalljumpHumanoid.StateChanged:Connect(function(_, NewState)
+        if NewState == Enum.HumanoidStateType.Landed or NewState == Enum.HumanoidStateType.Running then
+            ResetWalljumpCount()
+        elseif NewState == Enum.HumanoidStateType.Freefall then
+            state.WalljumpFallStartTime = tick()
+            if state.walljumpCount == 0 then
+                state.walljumpLastJumpTime = tick()
+            end
+        end
+    end)
+    table.insert(NoJumpCooldownConnections, state.walljumpStateConnection)
     
     if state.WalljumpJumpRequestConnection then
         pcall(function() state.WalljumpJumpRequestConnection:Disconnect() end)
@@ -2381,14 +2435,12 @@ local function SetupWalljump(Character)
     
     state.WalljumpJumpRequestConnection = UserInputService.JumpRequest:Connect(function()
         if not state.WalljumpCharacter or not state.WalljumpCharacter.Parent then
-            if state.WalljumpJumpRequestConnection then
-                pcall(function() state.WalljumpJumpRequestConnection:Disconnect() end)
-                state.WalljumpJumpRequestConnection = nil
-            end
+            CleanupWalljump()
             return
         end
-        local SpiderConfig = shared.Scare['Jump Modifications']['Configuration']['Walljump']
-        if not SpiderConfig or not SpiderConfig['Enabled'] then
+        
+        local WalljumpConfig = shared.Scare['Jump Modifications']['Configuration']['Walljump']
+        if not WalljumpConfig or not WalljumpConfig['Enabled'] then
             return
         end
         
@@ -2400,16 +2452,31 @@ local function SetupWalljump(Character)
         if state.WalljumpHumanoid:GetState() ~= Enum.HumanoidStateType.Freefall then
             return
         end
-        if state.WalljumpFallStartTime == 0 or (tick() - state.WalljumpFallStartTime) < 0.2 then
+        
+        local FallDuration = tick() - state.WalljumpFallStartTime
+        if FallDuration < 0.15 then
             return
         end
+        
+        local TimeSinceLastJump = tick() - state.walljumpLastJumpTime
+        if TimeSinceLastJump < 0.3 then
+            return
+        end
+        
+        if state.walljumpCount >= state.walljumpMaxCount then
+            return
+        end
+        
         if not CheckForNearbyWall(RootPart) then
             return
         end
         
-        local WallJumpHeight = GetSpiderJumpHeight()
-        state.WalljumpHumanoid.JumpPower = WallJumpHeight
+        local WallJumpPower = GetWalljumpJumpPower()
+        state.WalljumpHumanoid.JumpPower = WallJumpPower
         state.WalljumpHumanoid:ChangeState(Enum.HumanoidStateType.Jumping)
+        
+        state.walljumpCount = state.walljumpCount + 1
+        state.walljumpLastJumpTime = tick()
         
         local ResetConnection
         ResetConnection = state.WalljumpHumanoid.StateChanged:Connect(function(_, NewState)
@@ -2418,22 +2485,14 @@ local function SetupWalljump(Character)
                 if state.WalljumpHumanoid then
                     state.WalljumpHumanoid.JumpPower = state.WalljumpOriginalJumpPower
                 end
+                if NewState == Enum.HumanoidStateType.Landed then
+                    ResetWalljumpCount()
+                end
             end
         end)
         table.insert(NoJumpCooldownConnections, ResetConnection)
     end)
     table.insert(NoJumpCooldownConnections, state.WalljumpJumpRequestConnection)
-    
-    if state.WalljumpHumanoid then
-        local StateConnection = state.WalljumpHumanoid.StateChanged:Connect(function(_, NewState)
-            if NewState == Enum.HumanoidStateType.Freefall then
-                state.WalljumpFallStartTime = tick()
-            elseif NewState == Enum.HumanoidStateType.Landed or NewState == Enum.HumanoidStateType.Running then
-                state.WalljumpFallStartTime = 0
-            end
-        end)
-        table.insert(NoJumpCooldownConnections, StateConnection)
-    end
 end
 
 local function GetHealthStatus()
@@ -2938,10 +2997,89 @@ local function UpdateTriggerBot()
     end
     
     if CurrentTime - state.lastAttackTime >= Cooldown then
-        pcall(function()
-            Tool:Activate()
-        end)
-        state.lastAttackTime = CurrentTime
+        local ShootSuccess = false
+        
+        local function AttemptShoot(Method)
+            local Success = false
+            pcall(function()
+                if Method == "Activate" and Tool.Activate then
+                    Tool:Activate()
+                    Success = true
+                elseif Method == "Fire" and Tool:FindFirstChild("Fire") then
+                    local FireEvent = Tool:FindFirstChild("Fire")
+                    if FireEvent:IsA("RemoteEvent") then
+                        FireEvent:FireServer()
+                        Success = true
+                    elseif FireEvent:IsA("BindableEvent") then
+                        FireEvent:Fire()
+                        Success = true
+                    end
+                elseif Method == "Shoot" and Tool:FindFirstChild("Shoot") then
+                    local ShootEvent = Tool:FindFirstChild("Shoot")
+                    if ShootEvent:IsA("RemoteEvent") then
+                        ShootEvent:FireServer()
+                        Success = true
+                    elseif ShootEvent:IsA("BindableEvent") then
+                        ShootEvent:Fire()
+                        Success = true
+                    end
+                elseif Method == "Click" then
+                    local Mouse = game:GetService("Players").LocalPlayer:GetMouse()
+                    if Mouse then
+                        Mouse.Button1Down:Fire()
+                        task.wait(0.02)
+                        Mouse.Button1Up:Fire()
+                        Success = true
+                    end
+                elseif Method == "RemoteEvent" then
+                    for _, Child in pairs(Tool:GetChildren()) do
+                        if Child:IsA("RemoteEvent") and Child.Name ~= "Fire" and Child.Name ~= "Shoot" then
+                            Child:FireServer()
+                            Success = true
+                            break
+                        end
+                    end
+                elseif Method == "Attack" and Tool:FindFirstChild("Attack") then
+                    local AttackEvent = Tool:FindFirstChild("Attack")
+                    if AttackEvent:IsA("RemoteEvent") then
+                        AttackEvent:FireServer()
+                        Success = true
+                    elseif AttackEvent:IsA("BindableEvent") then
+                        AttackEvent:Fire()
+                        Success = true
+                    end
+                end
+            end)
+            return Success
+        end
+        
+        local ShootMethods = {"Activate", "Fire", "Shoot", "Click", "RemoteEvent", "Attack"}
+        for _, Method in pairs(ShootMethods) do
+            if AttemptShoot(Method) then
+                ShootSuccess = true
+                break
+            end
+        end
+        
+        if not ShootSuccess then
+            pcall(function()
+                local Mouse = game:GetService("Players").LocalPlayer:GetMouse()
+                if Mouse then
+                    local Button1Down = Mouse.Button1Down
+                    local Button1Up = Mouse.Button1Up
+                    if Button1Down and Button1Up then
+                        Button1Down:Fire()
+                        task.wait(0.05)
+                        Button1Up:Fire()
+                        ShootSuccess = true
+                    end
+                end
+            end)
+        end
+        
+        if ShootSuccess then
+            state.lastAttackTime = CurrentTime
+        end
     end
 end
 
@@ -3134,6 +3272,23 @@ local function CheckFirstPerson()
     else
         state.isFirstPerson = false
     end
+end
+
+local function SetupNoJumpCooldown(Character)
+    if not Character then return end
+    local Humanoid = Character:FindFirstChildOfClass('Humanoid')
+    if not Humanoid then return end
+    
+    local JumpCfg = shared.Scare['Jump Modifications']['Configuration']
+    if not JumpCfg or not JumpCfg['No Jump Cooldown'] then return end
+    
+    local DefaultJumpPower = Humanoid.JumpPower
+    local Connection = Humanoid:GetPropertyChangedSignal('JumpPower'):Connect(function()
+        if Humanoid.JumpPower == 0 then
+            Humanoid.JumpPower = DefaultJumpPower
+        end
+    end)
+    table.insert(NoJumpCooldownConnections, Connection)
 end
 
 RunService.PreRender:Connect(function()
@@ -3336,23 +3491,6 @@ local function AntiFall(Character)
     table.insert(AntiFallConnections, Connection)
 end
 
-local function NoJumpCooldown(Character)
-    if not Character then return end
-    local Humanoid = Character:FindFirstChildOfClass('Humanoid')
-    if not Humanoid then return end
-    
-    local JumpCfg = shared.Scare['Jump Modifications']['Configuration']
-    if not JumpCfg or not JumpCfg['No Jump Cooldown'] then return end
-    
-    local DefaultJumpPower = Humanoid.JumpPower
-    local Connection = Humanoid:GetPropertyChangedSignal('JumpPower'):Connect(function()
-        if Humanoid.JumpPower == 0 then
-            Humanoid.JumpPower = DefaultJumpPower
-        end
-    end)
-    table.insert(NoJumpCooldownConnections, Connection)
-end
-
 local function SetupJumpFeatures()
     local Character = LocalPlayer.Character
     if not Character then return end
@@ -3378,7 +3516,7 @@ local function SetupJumpFeatures()
         end
         
         if JumpCfg['No Jump Cooldown'] then
-            NoJumpCooldown(Character)
+            SetupNoJumpCooldown(Character)
         end
     end
 end
