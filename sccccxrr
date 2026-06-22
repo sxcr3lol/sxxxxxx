@@ -38,6 +38,9 @@ local state = {
     cameraTarget = nil,
     cameraSmoothingX = 0,
     cameraSmoothingY = 0,
+    isFirstPerson = false,
+    mouseLockActive = false,
+    lastMousePosition = nil,
 }
 
 local AllConnections = {}
@@ -879,7 +882,9 @@ local function GetClosestPlayerInFOV(MaxRange, mode)
         if not Root then continue end
         if MaxRange and MaxRange < math.huge then
             local Dist = (CamPos - Root.Position).Magnitude
-            if Dist > MaxRange then continue end
+            if Dist > MaxRange then 
+                continue 
+            end
         end
         local ScreenPos, OnScreen = Camera:WorldToViewportPoint(Root.Position)
         if not OnScreen or ScreenPos.Z <= 0 then continue end
@@ -1991,11 +1996,13 @@ local function HandleCameraKey(input, processed)
             state.cameraTarget = nil
             state.cameraSmoothingX = 0
             state.cameraSmoothingY = 0
+            state.mouseLockActive = false
         else
             State.Targets.Camera = nil
             state.cameraTarget = nil
             state.cameraSmoothingX = 0
             state.cameraSmoothingY = 0
+            state.mouseLockActive = false
         end
     elseif SelMode == "Hold" then
         State.CameraTargetLocked = true
@@ -2008,6 +2015,7 @@ local function HandleCameraKey(input, processed)
         state.cameraTarget = nil
         state.cameraSmoothingX = 0
         state.cameraSmoothingY = 0
+        state.mouseLockActive = false
     end
 end
 
@@ -2045,6 +2053,7 @@ local function HandleCameraKeyRelease(input)
     state.cameraTarget = nil
     state.cameraSmoothingX = 0
     state.cameraSmoothingY = 0
+    state.mouseLockActive = false
 end
 
 UserInputService.InputBegan:Connect(function(input, processed)
@@ -2977,6 +2986,8 @@ local function UpdateCameraAimbot()
     end
     
     if not State.CameraTargetLocked then
+        state.cameraSmoothingX = 0
+        state.cameraSmoothingY = 0
         return
     end
     
@@ -2984,11 +2995,25 @@ local function UpdateCameraAimbot()
     
     local Target = State.Targets.Camera
     if not Target then
+        State.CameraTargetLocked = false
+        state.cameraSmoothingX = 0
+        state.cameraSmoothingY = 0
+        return
+    end
+    
+    if IsTargetDead(Target) then
+        State.CameraTargetLocked = false
+        State.Targets.Camera = nil
+        state.cameraSmoothingX = 0
+        state.cameraSmoothingY = 0
         return
     end
     
     local TargetChar = Target.Character
     if not TargetChar then
+        State.CameraTargetLocked = false
+        state.cameraSmoothingX = 0
+        state.cameraSmoothingY = 0
         return
     end
     
@@ -3014,6 +3039,7 @@ local function UpdateCameraAimbot()
     local TargetPos = Root.Position
     local Smoothing = CameraCfg["Configuration"]["Smoothing"] or 0.35
     local Snappiness = CameraCfg["Configuration"]["Snappiness"] or 0.203
+    local MouseLock = CameraCfg["Configuration"]["Mouse Lock"] or false
     
     local ScreenPos, OnScreen = Camera:WorldToViewportPoint(TargetPos)
     if not OnScreen or ScreenPos.Z <= 0 then
@@ -3026,24 +3052,93 @@ local function UpdateCameraAimbot()
     local CenterX = ViewportSize.X / 2
     local CenterY = ViewportSize.Y / 2
     
-    local DeltaX = TargetScreenX - CenterX
-    local DeltaY = TargetScreenY - CenterY
+    if MouseLock then
+        local MousePos = UserInputService:GetMouseLocation()
+        local DeltaX = TargetScreenX - MousePos.X
+        local DeltaY = TargetScreenY - MousePos.Y
+        
+        local Deadzone = 2.0
+        if math.abs(DeltaX) <= Deadzone and math.abs(DeltaY) <= Deadzone then
+            state.cameraSmoothingX = 0
+            state.cameraSmoothingY = 0
+            return
+        end
+        
+        local SmoothFactor = 0.08
+        local MaxVelocity = 6.0
+        
+        if state.cameraSmoothingX == 0 and state.cameraSmoothingY == 0 then
+            state.cameraSmoothingX = DeltaX * 0.08
+            state.cameraSmoothingY = DeltaY * 0.08
+        end
+        
+        local TargetSmoothX = DeltaX * SmoothFactor
+        local TargetSmoothY = DeltaY * SmoothFactor
+        
+        state.cameraSmoothingX = state.cameraSmoothingX + (TargetSmoothX - state.cameraSmoothingX) * 0.25
+        state.cameraSmoothingY = state.cameraSmoothingY + (TargetSmoothY - state.cameraSmoothingY) * 0.25
+        
+        local MoveX = state.cameraSmoothingX
+        local MoveY = state.cameraSmoothingY
+        
+        local Magnitude = math.sqrt(MoveX * MoveX + MoveY * MoveY)
+        if Magnitude > MaxVelocity then
+            MoveX = (MoveX / Magnitude) * MaxVelocity
+            MoveY = (MoveY / Magnitude) * MaxVelocity
+        end
+        
+        if math.abs(MoveX) > 0.3 or math.abs(MoveY) > 0.3 then
+            mousemoverel(MoveX, MoveY)
+        end
+        state.mouseLockActive = true
+    else
+        local DeltaX = TargetScreenX - CenterX
+        local DeltaY = TargetScreenY - CenterY
+        
+        local StepX = DeltaX * Snappiness
+        local StepY = DeltaY * Snappiness
+        
+        state.cameraSmoothingX = state.cameraSmoothingX + (StepX - state.cameraSmoothingX) * Smoothing
+        state.cameraSmoothingY = state.cameraSmoothingY + (StepY - state.cameraSmoothingY) * Smoothing
+        
+        local FinalDeltaX = state.cameraSmoothingX
+        local FinalDeltaY = state.cameraSmoothingY
+        
+        local Deadzone = 0.5
+        if math.abs(FinalDeltaX) > Deadzone or math.abs(FinalDeltaY) > Deadzone then
+            mousemoverel(FinalDeltaX, FinalDeltaY)
+        end
+        state.mouseLockActive = false
+    end
+end
+
+local function CheckFirstPerson()
+    local Character = LocalPlayer.Character
+    if not Character then
+        return
+    end
     
-    local StepX = DeltaX * Snappiness
-    local StepY = DeltaY * Snappiness
+    local Humanoid = Character:FindFirstChildOfClass("Humanoid")
+    if not Humanoid then
+        return
+    end
     
-    state.cameraSmoothingX = state.cameraSmoothingX + (StepX - state.cameraSmoothingX) * Smoothing
-    state.cameraSmoothingY = state.cameraSmoothingY + (StepY - state.cameraSmoothingY) * Smoothing
+    local CurrentCamera = workspace.CurrentCamera
+    if not CurrentCamera then
+        return
+    end
     
-    local FinalDeltaX = state.cameraSmoothingX
-    local FinalDeltaY = state.cameraSmoothingY
-    
-    if math.abs(FinalDeltaX) > 0.5 or math.abs(FinalDeltaY) > 0.5 then
-        mousemoverel(FinalDeltaX, FinalDeltaY)
+    local CameraSubject = CurrentCamera.CameraSubject
+    if CameraSubject == Humanoid then
+        state.isFirstPerson = true
+    else
+        state.isFirstPerson = false
     end
 end
 
 RunService.PreRender:Connect(function()
+    CheckFirstPerson()
+    
     if state.shootDetectionEnabled then
         local newTarget = GetClosestPlayerToCursor(1500, "Trigger")
         if newTarget and CheckConditions(newTarget, "Trigger Bot") then
