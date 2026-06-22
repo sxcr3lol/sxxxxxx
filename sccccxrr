@@ -34,6 +34,10 @@ local state = {
     PanicGroundConnection = nil,
     CurrentTarget = nil,
     triggerKeyHeld = false,
+    cameraTargetLocked = false,
+    cameraTarget = nil,
+    cameraSmoothingX = 0,
+    cameraSmoothingY = 0,
 }
 
 local AllConnections = {}
@@ -302,6 +306,8 @@ local function FullCleanup()
     state.lockedTarget = nil
     state.hostDetected = false
     state.triggerKeyHeld = false
+    state.cameraTargetLocked = false
+    state.cameraTarget = nil
 end
 
 local LocalPlayer = Players.LocalPlayer
@@ -341,6 +347,18 @@ local function GetSilentKeybind()
     return GetKeybind()
 end
 
+local function GetCameraKeybind()
+    local Settings = GetConfig()
+    if not Settings then
+        return "C"
+    end
+    local SeperateCfg = Settings['Configuration'] and Settings['Configuration']['Seperate'] and Settings['Configuration']['Seperate']['Configuration']
+    if SeperateCfg and SeperateCfg['Enabled'] then
+        return SeperateCfg['Camera Aimbot'] or "V"
+    end
+    return GetKeybind()
+end
+
 local function GetSelectionMode()
     local Settings = GetConfig()
     local SelSpec = Settings and Settings['Configuration'] and Settings['Configuration']['Selection Specific'] and Settings['Configuration']['Selection Specific']['Configuration']
@@ -359,6 +377,15 @@ local function GetTriggerSelectionMode()
     return "Toggle"
 end
 
+local function GetCameraSelectionMode()
+    local Settings = GetConfig()
+    local SelSpec = Settings and Settings['Configuration'] and Settings['Configuration']['Selection Specific'] and Settings['Configuration']['Selection Specific']['Configuration']
+    if SelSpec then
+        return SelSpec['Camera Aimbot'] or "Toggle"
+    end
+    return "Toggle"
+end
+
 local function GetSelectionSystem()
     local Settings = GetConfig()
     local SelSys = Settings and Settings['Configuration'] and Settings['Configuration']['Selection System'] and Settings['Configuration']['Selection System']['Configuration']
@@ -373,6 +400,15 @@ local function GetTriggerSelectionSystem()
     local SelSys = Settings and Settings['Configuration'] and Settings['Configuration']['Selection System'] and Settings['Configuration']['Selection System']['Configuration']
     if SelSys then
         return SelSys['Trigger Bot'] or "Target"
+    end
+    return "Target"
+end
+
+local function GetCameraSelectionSystem()
+    local Settings = GetConfig()
+    local SelSys = Settings and Settings['Configuration'] and Settings['Configuration']['Selection System'] and Settings['Configuration']['Selection System']['Configuration']
+    if SelSys then
+        return SelSys['Camera Aimbot'] or "Target"
     end
     return "Target"
 end
@@ -601,9 +637,10 @@ UserInputService.InputBegan:Connect(function(input, gameProcessed)
 end)
 
 local State = {
-    Targets = { Silent = nil, Trigger = nil },
+    Targets = { Silent = nil, Trigger = nil, Camera = nil },
     SilentTargetLocked = false,
     TriggerTargetLocked = false,
+    CameraTargetLocked = false,
 }
 
 local LastFrame = {
@@ -611,6 +648,7 @@ local LastFrame = {
     ESPVisible = false,
     PanelVisible = false,
     TriggerFOVVisible = false,
+    CameraFOVVisible = false,
 }
 
 local function IsSameCrew(Player)
@@ -1351,6 +1389,12 @@ TriggerFOVBox.Filled = false
 TriggerFOVBox.Thickness = 1
 TriggerFOVBox.Transparency = 1
 
+local CameraFOVBox = CreateSquare()
+CameraFOVBox.Visible = false
+CameraFOVBox.Filled = false
+CameraFOVBox.Thickness = 1
+CameraFOVBox.Transparency = 1
+
 local NameESPDrawings = {}
 
 local PanelTitle = CreateTextLabel()
@@ -1636,7 +1680,7 @@ if isHoodCustoms then
 end
 
 local function ValidateTarget(mode)
-    local locked = (mode == "Silent" and State.SilentTargetLocked) or (mode == "Trigger" and State.TriggerTargetLocked)
+    local locked = (mode == "Silent" and State.SilentTargetLocked) or (mode == "Trigger" and State.TriggerTargetLocked) or (mode == "Camera" and State.CameraTargetLocked)
     if not locked then return end
     
     local Target = State.Targets[mode]
@@ -1646,34 +1690,40 @@ local function ValidateTarget(mode)
             State.Targets[mode] = nil
             if mode == "Silent" then
                 State.SilentTargetLocked = false
-            else
+            elseif mode == "Trigger" then
                 State.TriggerTargetLocked = false
+            else
+                State.CameraTargetLocked = false
+                state.cameraTarget = nil
             end
             state.lastValidTarget = nil
             state.triggerLastValidTarget = nil
         elseif not CheckConditions(Target, mode) then
             if mode == "Silent" then
                 state.lastValidTarget = Target
-            else
+            elseif mode == "Trigger" then
                 state.triggerLastValidTarget = Target
             end
             State.Targets[mode] = nil
         end
     end
     
-    local isLocked = (mode == "Silent" and State.SilentTargetLocked) or (mode == "Trigger" and State.TriggerTargetLocked)
+    local isLocked = (mode == "Silent" and State.SilentTargetLocked) or (mode == "Trigger" and State.TriggerTargetLocked) or (mode == "Camera" and State.CameraTargetLocked)
     local target = State.Targets[mode]
     
     if isLocked and not target then
-        local cachedTarget = (mode == "Silent" and state.lastValidTarget) or (mode == "Trigger" and state.triggerLastValidTarget)
+        local cachedTarget = (mode == "Silent" and state.lastValidTarget) or (mode == "Trigger" and state.triggerLastValidTarget) or (mode == "Camera" and state.cameraTarget)
         if cachedTarget then
             if IsTargetDead(cachedTarget) or not CheckConditionsExceptVisible(cachedTarget, mode) then
                 if mode == "Silent" then
                     State.SilentTargetLocked = false
                     state.lastValidTarget = nil
-                else
+                elseif mode == "Trigger" then
                     State.TriggerTargetLocked = false
                     state.triggerLastValidTarget = nil
+                else
+                    State.CameraTargetLocked = false
+                    state.cameraTarget = nil
                 end
             else
                 local head = cachedTarget.Character and cachedTarget.Character:FindFirstChild("Head")
@@ -1681,8 +1731,10 @@ local function ValidateTarget(mode)
                     State.Targets[mode] = cachedTarget
                     if mode == "Silent" then
                         state.lastValidTarget = nil
-                    else
+                    elseif mode == "Trigger" then
                         state.triggerLastValidTarget = nil
+                    else
+                        state.cameraTarget = nil
                     end
                 end
             end
@@ -1891,6 +1943,110 @@ local function HandleShootDetectionKey(input, processed)
     end
 end
 
+local function HandleCameraKey(input, processed)
+    if processed then return end
+    
+    local Config = GetConfig()
+    local CameraCfg = Config and Config["Camera Aimbot"]
+    if not CameraCfg or not CameraCfg["Configuration"] or not CameraCfg["Configuration"]["Enabled"] then
+        return
+    end
+    
+    local SelMode = GetCameraSelectionMode()
+    local MaxR = CameraCfg["Configuration"]["Distance"] or 1500
+    local mode = "Camera"
+    local key = GetCameraKeybind()
+    
+    if not key then
+        return
+    end
+    
+    local match = false
+    pcall(function()
+        if input.KeyCode == Enum.KeyCode[key:upper()] then
+            match = true
+        end
+    end)
+    if not match then
+        pcall(function()
+            if input.UserInputType == Enum.UserInputType[key] then
+                match = true
+            end
+        end)
+    end
+    
+    if not match then
+        return
+    end
+    
+    if SelMode == "Toggle" then
+        State.CameraTargetLocked = not State.CameraTargetLocked
+        if State.CameraTargetLocked then
+            local SelSystem = GetCameraSelectionSystem()
+            if SelSystem == "Automatic" then
+                State.Targets.Camera = GetClosestPlayerInFOV(MaxR, mode)
+            else
+                State.Targets.Camera = GetClosestPlayerToCursor(MaxR, mode)
+            end
+            state.cameraTarget = nil
+            state.cameraSmoothingX = 0
+            state.cameraSmoothingY = 0
+        else
+            State.Targets.Camera = nil
+            state.cameraTarget = nil
+            state.cameraSmoothingX = 0
+            state.cameraSmoothingY = 0
+        end
+    elseif SelMode == "Hold" then
+        State.CameraTargetLocked = true
+        local SelSystem = GetCameraSelectionSystem()
+        if SelSystem == "Automatic" then
+            State.Targets.Camera = GetClosestPlayerInFOV(MaxR, mode)
+        else
+            State.Targets.Camera = GetClosestPlayerToCursor(MaxR, mode)
+        end
+        state.cameraTarget = nil
+        state.cameraSmoothingX = 0
+        state.cameraSmoothingY = 0
+    end
+end
+
+local function HandleCameraKeyRelease(input)
+    local SelMode = GetCameraSelectionMode()
+    if SelMode ~= "Hold" then
+        return
+    end
+    
+    local key = GetCameraKeybind()
+    if not key then
+        return
+    end
+    
+    local match = false
+    pcall(function()
+        if input.KeyCode == Enum.KeyCode[key:upper()] then
+            match = true
+        end
+    end)
+    if not match then
+        pcall(function()
+            if input.UserInputType == Enum.UserInputType[key] then
+                match = true
+            end
+        end)
+    end
+    
+    if not match then
+        return
+    end
+    
+    State.CameraTargetLocked = false
+    State.Targets.Camera = nil
+    state.cameraTarget = nil
+    state.cameraSmoothingX = 0
+    state.cameraSmoothingY = 0
+end
+
 UserInputService.InputBegan:Connect(function(input, processed)
     if processed then return end
     
@@ -1934,6 +2090,7 @@ UserInputService.InputBegan:Connect(function(input, processed)
     
     HandleTriggerKey(input, processed)
     HandleShootDetectionKey(input, processed)
+    HandleCameraKey(input, processed)
 end)
 
 UserInputService.InputEnded:Connect(function(input)
@@ -1964,6 +2121,7 @@ UserInputService.InputEnded:Connect(function(input)
     end
     
     HandleTriggerKeyRelease(input)
+    HandleCameraKeyRelease(input)
 end)
 
 local function UpdateTriggerFOV()
@@ -2064,6 +2222,50 @@ local function UpdateSilentFOV()
     end
 end
 
+local function UpdateCameraFOV()
+    local Config = GetConfig()
+    local CameraCfg = Config and Config["Camera Aimbot"]
+    local CameraEnabled = CameraCfg and CameraCfg["Configuration"] and CameraCfg["Configuration"]["Enabled"]
+    if not CameraEnabled then
+        if LastFrame.CameraFOVVisible then
+            CameraFOVBox.Visible = false
+            LastFrame.CameraFOVVisible = false
+        end
+        return
+    end
+
+    ValidateTarget("Camera")
+
+    local CameraTarget = State.Targets.Camera
+
+    local FOVVis = false
+    local FOVCfg = CameraCfg["FOV"] or {}
+    local FOVEnabled = FOVCfg["Configuration"] and FOVCfg["Configuration"]["Enabled"]
+    if FOVEnabled and FOVCfg["Configuration"]["Visualize"] and CameraTarget then
+        local Char = CameraTarget.Character
+        local Root = Char and Char:FindFirstChild("HumanoidRootPart")
+        if Root then
+            local ScreenPos, OnScreen = Camera:WorldToViewportPoint(Root.Position)
+            if OnScreen and ScreenPos.Z > 1 then
+                local Size = FOVCfg["Configuration"]["Size"] or { X = 1, Y = 1, Z = 1 }
+                local ViewportX, ViewportY = Camera.ViewportSize.X, Camera.ViewportSize.Y
+                local CamFOV = Camera.FieldOfView
+                local Scale = (Root.Size.Y * ViewportY) / (ScreenPos.Z * 2) * 80 / CamFOV
+                local W = math.min((Size.X or 1) * Scale, ViewportX * 2)
+                local H = math.min((Size.Y or 1) * Scale, ViewportY * 2)
+                CameraFOVBox.Size = Vector2.new(math.floor(W + 0.5), math.floor(H + 0.5))
+                CameraFOVBox.Position = Vector2.new(math.floor(ScreenPos.X - W/2 + 0.5), math.floor(ScreenPos.Y - H/2 + 0.5))
+                CameraFOVBox.Color = FOVCfg["Configuration"]["Color"] or Color3.new(1, 0, 0)
+                FOVVis = true
+            end
+        end
+    end
+    if FOVVis ~= LastFrame.CameraFOVVisible then
+        CameraFOVBox.Visible = FOVVis
+        LastFrame.CameraFOVVisible = FOVVis
+    end
+end
+
 local function UpdateESP()
     local Config = GetConfig()
     local VisualsCfg = Config and Config["Visuals"] or {}
@@ -2106,7 +2308,7 @@ local function UpdateESP()
                 NameESPDrawings[Plr] = Draw
             end
             local Draw = NameESPDrawings[Plr]
-            local IsLocked = (Plr == State.Targets.Silent) or (Plr == State.Targets.Trigger)
+            local IsLocked = (Plr == State.Targets.Silent) or (Plr == State.Targets.Trigger) or (Plr == State.Targets.Camera)
             Draw.Text = (Method == "Username") and Plr.Name or Plr.DisplayName
             Draw.Size = Size
             Draw.Color = IsLocked and AimedColor or NameColor
@@ -2342,6 +2544,7 @@ local function UpdatePanel()
         
         local silentTarget = State.Targets.Silent
         local triggerTarget = State.Targets.Trigger
+        local cameraTarget = State.Targets.Camera
         
         local function getTargetName(target)
             if target and target.Parent and not IsTargetDead(target) then
@@ -2352,6 +2555,7 @@ local function UpdatePanel()
         
         local silentName = getTargetName(silentTarget)
         local triggerName = getTargetName(triggerTarget)
+        local cameraName = getTargetName(cameraTarget)
         
         local healthStatus = ""
         local walkSpeedStatus = "N/A"
@@ -2465,6 +2669,20 @@ local function UpdatePanel()
             end
 
             LabelIdx = LabelIdx + 1
+            local L3 = PanelLabels[LabelIdx]
+            if L3 then
+                L3.Text = string.format('Camera Aim <font color="rgb(%d,%d,%d)">:</font> <font color="rgb(%d,%d,%d)">(%s)</font>',
+                    math.floor(FC.R*255), math.floor(FC.G*255), math.floor(FC.B*255),
+                    math.floor(CurrentColor.R*255), math.floor(CurrentColor.G*255), math.floor(CurrentColor.B*255),
+                    cameraName)
+                L3.Color = Color3.new(1,1,1)
+                L3.Size = 14
+                L3.Position = Vector2.new(BaseX, OffsetY)
+                L3.Visible = true
+                OffsetY = OffsetY + 18
+            end
+
+            LabelIdx = LabelIdx + 1
             local L = PanelLabels[LabelIdx]
             if L then
                 L.Text = string.format('WalkSpeed <font color="rgb(%d,%d,%d)">:</font> <font color="rgb(%d,%d,%d)">(N/A)</font>',
@@ -2502,6 +2720,20 @@ local function UpdatePanel()
                 L2.Size = 14
                 L2.Position = Vector2.new(BaseX, OffsetY)
                 L2.Visible = true
+                OffsetY = OffsetY + 18
+            end
+
+            LabelIdx = LabelIdx + 1
+            local L3 = PanelLabels[LabelIdx]
+            if L3 then
+                L3.Text = string.format('Camera Aim <font color="rgb(%d,%d,%d)">:</font> <font color="rgb(%d,%d,%d)">(%s)</font>',
+                    math.floor(FC.R*255), math.floor(FC.G*255), math.floor(FC.B*255),
+                    math.floor(CurrentColor.R*255), math.floor(CurrentColor.G*255), math.floor(CurrentColor.B*255),
+                    cameraName)
+                L3.Color = Color3.new(1,1,1)
+                L3.Size = 14
+                L3.Position = Vector2.new(BaseX, OffsetY)
+                L3.Visible = true
                 OffsetY = OffsetY + 18
             end
         end
@@ -2737,6 +2969,80 @@ local function SetupShootDetection()
     end
 end
 
+local function UpdateCameraAimbot()
+    local Config = GetConfig()
+    local CameraCfg = Config and Config["Camera Aimbot"]
+    if not CameraCfg or not CameraCfg["Configuration"] or not CameraCfg["Configuration"]["Enabled"] then
+        return
+    end
+    
+    if not State.CameraTargetLocked then
+        return
+    end
+    
+    ValidateTarget("Camera")
+    
+    local Target = State.Targets.Camera
+    if not Target then
+        return
+    end
+    
+    local TargetChar = Target.Character
+    if not TargetChar then
+        return
+    end
+    
+    local FOVCfg = CameraCfg["FOV"] or {}
+    local FOVEnabled = FOVCfg["Configuration"] and FOVCfg["Configuration"]["Enabled"]
+    if FOVEnabled then
+        local FOVSize = FOVCfg["Configuration"]["Size"] or { X = 1, Y = 1, Z = 1 }
+        local ScreenCenter = GetScreenCenter()
+        if not IsScreenPointInTargetBox(Target, ScreenCenter, FOVSize) then
+            return
+        end
+    end
+    
+    if not CheckConditions(Target, "Camera Aimbot") then
+        return
+    end
+    
+    local Root = TargetChar:FindFirstChild("HumanoidRootPart")
+    if not Root then
+        return
+    end
+    
+    local TargetPos = Root.Position
+    local Smoothing = CameraCfg["Configuration"]["Smoothing"] or 0.35
+    local Snappiness = CameraCfg["Configuration"]["Snappiness"] or 0.203
+    
+    local ScreenPos, OnScreen = Camera:WorldToViewportPoint(TargetPos)
+    if not OnScreen or ScreenPos.Z <= 0 then
+        return
+    end
+    
+    local ViewportSize = Camera.ViewportSize
+    local TargetScreenX = ScreenPos.X
+    local TargetScreenY = ScreenPos.Y
+    local CenterX = ViewportSize.X / 2
+    local CenterY = ViewportSize.Y / 2
+    
+    local DeltaX = TargetScreenX - CenterX
+    local DeltaY = TargetScreenY - CenterY
+    
+    local StepX = DeltaX * Snappiness
+    local StepY = DeltaY * Snappiness
+    
+    state.cameraSmoothingX = state.cameraSmoothingX + (StepX - state.cameraSmoothingX) * Smoothing
+    state.cameraSmoothingY = state.cameraSmoothingY + (StepY - state.cameraSmoothingY) * Smoothing
+    
+    local FinalDeltaX = state.cameraSmoothingX
+    local FinalDeltaY = state.cameraSmoothingY
+    
+    if math.abs(FinalDeltaX) > 0.5 or math.abs(FinalDeltaY) > 0.5 then
+        mousemoverel(FinalDeltaX, FinalDeltaY)
+    end
+end
+
 RunService.PreRender:Connect(function()
     if state.shootDetectionEnabled then
         local newTarget = GetClosestPlayerToCursor(1500, "Trigger")
@@ -2817,13 +3123,26 @@ RunService.PreRender:Connect(function()
         end
     end
     
+    if State.CameraTargetLocked and GetCameraSelectionSystem() == "Automatic" then
+        local MaxR = GetConfig() and GetConfig()["Camera Aimbot"] and GetConfig()["Camera Aimbot"]["Configuration"] and GetConfig()["Camera Aimbot"]["Configuration"]["Distance"] or 1500
+        local CurrentTarget = State.Targets.Camera
+        local NewTarget = GetClosestPlayerInFOV(MaxR, "Camera")
+        
+        if NewTarget and NewTarget ~= CurrentTarget then
+            State.Targets.Camera = NewTarget
+            state.cameraTarget = nil
+        end
+    end
+    
     ApplyWorldModifications()
     UpdateSilentFOV()
     UpdateTriggerFOV()
+    UpdateCameraFOV()
     UpdateESP()
     UpdatePanel()
     UpdateMultiPartVisuals()
     UpdateTriggerBot()
+    UpdateCameraAimbot()
 end)
 
 SetupShootDetection()
@@ -2837,11 +3156,17 @@ Players.PlayerRemoving:Connect(function(Plr)
     if state.triggerLastValidTarget == Plr then
         state.triggerLastValidTarget = nil
     end
+    if state.cameraTarget == Plr then
+        state.cameraTarget = nil
+    end
     if State.Targets.Silent == Plr then
         State.Targets.Silent = nil
     end
     if State.Targets.Trigger == Plr then
         State.Targets.Trigger = nil
+    end
+    if State.Targets.Camera == Plr then
+        State.Targets.Camera = nil
     end
 end)
 
