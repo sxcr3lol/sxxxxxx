@@ -2973,37 +2973,839 @@ if DaHoodPlaceId[game.PlaceId] then
     end))
 end
 
-local function SetupCharacter(Character)
-    SetupJumpFeatures()
-end
-
-if LocalPlayer.Character then
-    SetupCharacter(LocalPlayer.Character)
-end
-
-LocalPlayer.CharacterAdded:Connect(function(Character)
-    CleanupWalljump()
-    if state.PanicGroundConnection then
-        pcall(function() state.PanicGroundConnection:Disconnect() end)
-        state.PanicGroundConnection = nil
-    end
-    for _, conn in next, AntiFallConnections do
-        if conn and conn.Disconnect then
-            pcall(function() conn:Disconnect() end)
-        end
-    end
-    AntiFallConnections = {}
-    for _, conn in next, NoJumpCooldownConnections do
-        if conn and conn.Disconnect then
-            pcall(function() conn:Disconnect() end)
-        end
-    end
-    NoJumpCooldownConnections = {}
-    
-    SetupCharacter(Character)
-end)
-
-return {
-    State = State,
-    GetClosest = GetClosestPlayerToCursor,
+local HoodCustomsPlaceIds = {
+    [9825515356] = true,
+    [80567999110374] = true,
+    [138995385694035] = true,
 }
+
+if HoodCustomsPlaceIds[game.PlaceId] then
+    local dataFolder = LocalPlayer:FindFirstChild("DataFolder")
+
+    getgenv().BulletChanger = {
+        DoubleBarrel = shared.Scare['Skin Changer']['Beam Color'],
+        Revolver = shared.Scare['Skin Changer']['Beam Color'],
+        Shotgun = shared.Scare['Skin Changer']['Beam Color'],
+        SMG = shared.Scare['Skin Changer']['Beam Color'],
+        TacticalShotgun = shared.Scare['Skin Changer']['Beam Color']
+    }
+
+    local Subscription = {
+        Enabled = true,
+        SubscriptionData = 16,
+        SubscriptionStreak = 53
+    }
+
+    local Skins = {
+        Enabled = shared.Scare['Skin Changer']['Configuration']['Enabled'],
+        ["DoubleBarrel"] = shared.Scare['Skin Changer']['Configuration']['[Double-Barrel SG]'],
+        ["Revolver"] = shared.Scare['Skin Changer']['Configuration']['[Revolver]'],
+        ["TacticalShotgun"] = shared.Scare['Skin Changer']['Configuration']['[TacticalShotgun]'],
+        ["SMG"] = "",
+        ["Shotgun"] = "",
+        Special = {
+            ["Knife"] = shared.Scare['Skin Changer']['Configuration']['[Knife]']
+        }
+    }
+
+    if dataFolder then
+        local subscriptionFolder = dataFolder:FindFirstChild("Subscription")
+
+        if subscriptionFolder then
+            local hasSubscription = subscriptionFolder:FindFirstChild("HasSubscription")
+            if hasSubscription and hasSubscription:IsA("BoolValue") then
+                hasSubscription.Value = Subscription.Enabled
+            end
+
+            local subscriptionData = subscriptionFolder:FindFirstChild("SubscriptionData")
+            if subscriptionData and subscriptionData:IsA("NumberValue") then
+                subscriptionData.Value = Subscription.SubscriptionData
+            end
+
+            local subscriptionStreak = subscriptionFolder:FindFirstChild("SubscriptionStreak")
+            if subscriptionStreak and subscriptionStreak:IsA("NumberValue") then
+                subscriptionStreak.Value = Subscription.SubscriptionStreak
+            end
+        end
+
+        local inventoryData = dataFolder:FindFirstChild("InventoryData")
+
+        if inventoryData then
+            local bulletBeams = inventoryData:FindFirstChild("BulletBeams")
+            local equippedBulletBeams = dataFolder:FindFirstChild("EquippedBulletBeams")
+
+            if bulletBeams and bulletBeams:IsA("StringValue") then
+                local bulletBeamData = {}
+                for weapon, skin in pairs(getgenv().BulletChanger) do
+                    local code
+                    if weapon == "DoubleBarrel" then
+                        code = "109d1326878cc594bc1bb42d126250810999782f"
+                    elseif weapon == "Revolver" then
+                        code = "539db315b53f77390c0aa74773158e25bedcdd6e"
+                    elseif weapon == "Shotgun" then
+                        code = "b415a7273aa86cbc2adc445fde5435eb5afababa"
+                    elseif weapon == "SMG" then
+                        code = "005af87725b42ac4ca8103d11af6bf0c7d55f7b3"
+                    elseif weapon == "TacticalShotgun" then
+                        code = "109d1326878cc594bc1bb42d126250810999782f"
+                    end
+                    if code then
+                        bulletBeamData[code] = { Name = skin }
+                    end
+                end
+                bulletBeams.Value = game:GetService("HttpService"):JSONEncode(bulletBeamData)
+            end
+
+            if equippedBulletBeams and equippedBulletBeams:IsA("StringValue") then
+                local equippedData = {}
+                equippedData["[DoubleBarrel]"] = "109d1326878cc594bc1bb42d126250810999782f"
+                equippedData["[Revolver]"] = "539db315b53f77390c0aa74773158e25bedcdd6e"
+                equippedData["[TacticalShotgun]"] = "109d1326878cc594bc1bb42d126250810999782f"
+                equippedData["[SMG]"] = "005af87725b42ac4ca8103d11af6bf0c7d55f7b3"
+                equippedData["[Shotgun]"] = "b415a7273aa86cbc2adc445fde5435eb5afababa"
+
+                equippedBulletBeams.Value = game:GetService("HttpService"):JSONEncode(equippedData)
+            end
+        end
+    end
+
+    local function weldingParts(part0, part1)
+        local weld = Instance.new("WeldConstraint")
+        weld.Part0 = part0
+        weld.Part1 = part1
+        weld.Parent = part0
+    end
+
+    local function applySkin(originalWeapon, newModel)
+        local handle = originalWeapon:FindFirstChild("Handle")
+        if not handle then
+            return
+        end
+
+        local existingSkin = originalWeapon:FindFirstChild("SkinClone")
+        if existingSkin then
+            existingSkin:Destroy()
+        end
+
+        local clone = newModel:Clone()
+        clone.Name = "SkinClone"
+        if not clone.PrimaryPart then
+            return
+        end
+
+        for _, part in ipairs(clone:GetDescendants()) do
+            if part:IsA("BasePart") then
+                part.CanCollide = false
+                part.Anchored = false
+                part.Massless = true
+                part.Transparency = 0
+            end
+        end
+
+        clone.Parent = originalWeapon
+        weldingParts(handle, clone.PrimaryPart)
+        clone:SetPrimaryPartCFrame(handle.CFrame)
+        handle.Transparency = 1
+    end
+
+    local function applySkinChanger()
+        local Backpack = LocalPlayer:FindFirstChild("Backpack")
+        if not Backpack then return end
+        
+        for weaponName, skinName in pairs(Skins) do
+            if weaponName ~= "Enabled" and weaponName ~= "Special" then
+                local weapon = Backpack:FindFirstChild("[" .. weaponName .. "]")
+                if weapon and skinName and skinName ~= "" then
+                    local skinFolder = ReplicatedStorage:FindFirstChild("Wraps")
+                    if skinFolder then
+                        local skinModel = skinFolder:FindFirstChild("[" .. weaponName .. "]")
+                        if skinModel then
+                            local actualSkin = skinModel:FindFirstChild(skinName)
+                            if actualSkin then
+                                applySkin(weapon, actualSkin)
+                            end
+                        end
+                    end
+                end
+            end
+        end
+
+        for knifeName, skinName in pairs(Skins.Special) do
+            local knife = Backpack:FindFirstChild("[" .. knifeName .. "]")
+            if knife and skinName and skinName ~= "" then
+                local skinModel = ReplicatedStorage:FindFirstChild("Knives")
+                if skinModel then
+                    local actualSkin = skinModel:FindFirstChild(skinName)
+                    if actualSkin then
+                        applySkin(knife, actualSkin)
+                    end
+                end
+            end
+        end
+    end
+
+    if Skins.Enabled then
+        task.wait(0.1)
+        applySkinChanger()
+    end
+
+    LocalPlayer.CharacterAdded:Connect(function(character)
+        task.wait(0.1)
+        applySkinChanger()
+    end)
+
+    local backpack = LocalPlayer:WaitForChild("Backpack")
+    backpack.ChildAdded:Connect(function(child)
+        task.wait(0.1)
+        if child:IsA("Tool") then
+            local weaponName = child.Name
+            local skinName = nil
+            
+            for skinWeapon, skin in pairs(Skins) do
+                if skinWeapon ~= "Enabled" and skinWeapon ~= "Special" then
+                    if "[" .. skinWeapon .. "]" == weaponName then
+                        skinName = skin
+                        break
+                    end
+                end
+            end
+            
+            if not skinName or skinName == "" then
+                for knifeName, skin in pairs(Skins.Special) do
+                    if "[" .. knifeName .. "]" == weaponName then
+                        skinName = skin
+                        break
+                    end
+                end
+            end
+            
+            if skinName and skinName ~= "" then
+                if weaponName == "[Knife]" then
+                    local skinModel = ReplicatedStorage:FindFirstChild("Knives")
+                    if skinModel then
+                        local actualSkin = skinModel:FindFirstChild(skinName)
+                        if actualSkin then
+                            applySkin(child, actualSkin)
+                        end
+                    end
+                else
+                    local skinFolder = ReplicatedStorage:FindFirstChild("Wraps")
+                    if skinFolder then
+                        local skinModel = skinFolder:FindFirstChild(weaponName)
+                        if skinModel then
+                            local actualSkin = skinModel:FindFirstChild(skinName)
+                            if actualSkin then
+                                applySkin(child, actualSkin)
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end)
+
+    for _, tool in ipairs(backpack:GetChildren()) do
+        if tool:IsA("Tool") then
+            local weaponName = tool.Name
+            local skinName = nil
+            
+            for skinWeapon, skin in pairs(Skins) do
+                if skinWeapon ~= "Enabled" and skinWeapon ~= "Special" then
+                    if "[" .. skinWeapon .. "]" == weaponName then
+                        skinName = skin
+                        break
+                    end
+                end
+            end
+            
+            if not skinName or skinName == "" then
+                for knifeName, skin in pairs(Skins.Special) do
+                    if "[" .. knifeName .. "]" == weaponName then
+                        skinName = skin
+                        break
+                    end
+                end
+            end
+            
+            if skinName and skinName ~= "" then
+                if weaponName == "[Knife]" then
+                    local skinModel = ReplicatedStorage:FindFirstChild("Knives")
+                    if skinModel then
+                        local actualSkin = skinModel:FindFirstChild(skinName)
+                        if actualSkin then
+                            applySkin(tool, actualSkin)
+                        end
+                    end
+                else
+                    local skinFolder = ReplicatedStorage:FindFirstChild("Wraps")
+                    if skinFolder then
+                        local skinModel = skinFolder:FindFirstChild(weaponName)
+                        if skinModel then
+                            local actualSkin = skinModel:FindFirstChild(skinName)
+                            if actualSkin then
+                                applySkin(tool, actualSkin)
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+end
+
+local DaHoodPlaceId = {
+    [2788229376] = true,
+}
+
+if DaHoodPlaceId[game.PlaceId] then
+    getgenv().KnifeSkins = {
+        ["Love Kukri"] = {soundId="",animationId="",positionOffset=Vector3.new(-0.14,0.14,-1.62),rotationOffset=Vector3.new(-90,180,-4.97),particle=true,textureId="rbxassetid://12124159284"},
+        ["GPO-Knife"] = {soundId="rbxassetid://4604390759",animationId="rbxassetid://14014278925",positionOffset=Vector3.new(0.00, -0.32, -1.07),rotationOffset=Vector3.new(90, -97.4, 90),particle=false,textureId=""},
+        ["Golden Age Tanto"] = {soundId="rbxassetid://5917819099",animationId="rbxassetid://13473404819",positionOffset=Vector3.new(0, -0.20, -1.2),rotationOffset=Vector3.new(90, 263.7, 180),particle=false,textureId=""}
+    }
+
+    getgenv().knifeData = {}
+    getgenv().skinCache = {}
+    getgenv()._currentKnifeSound = nil
+
+    if not shared.ScareSkinData then
+        shared.ScareSkinData = {}
+    end
+
+    local skinChanger = shared.Scare and shared.Scare['Skin Changer'] and shared.Scare['Skin Changer']['Configuration']
+
+    if skinChanger and skinChanger['Enabled'] then
+        for weapon, skin in pairs(skinChanger) do
+            if weapon ~= 'Enabled' and weapon ~= 'Beam Color' then
+                shared.ScareSkinData[weapon] = skin
+            end
+        end
+    end
+
+    local function clearMesh(tool, original)
+        for _, child in ipairs(tool:GetChildren()) do
+            if child.Name == "CurrentSkin" or (child:IsA("MeshPart") and child ~= original) then
+                child:Destroy()
+            end
+        end
+    end
+
+    local function applyBat(tool, name)
+        local mesh = nil
+        local descendants = tool:GetDescendants()
+        
+        for i = 1, #descendants do
+            local v = descendants[i]
+            if v:IsA("MeshPart") and v.Transparency == 0 then
+                mesh = v
+                break
+            end
+        end
+        
+        if not mesh then
+            return
+        end
+        
+        local batSkins = ReplicatedStorage:FindFirstChild("SkinModules")
+        
+        if not batSkins then
+            return
+        end
+        
+        batSkins = batSkins:FindFirstChild("Bats")
+        
+        if not batSkins then
+            return
+        end
+        
+        local skin = batSkins:FindFirstChild(name)
+        
+        if not skin then
+            return
+        end
+        
+        local clone = skin:Clone()
+        clone.Parent = tool
+        clone.CFrame = mesh.CFrame
+        clone.Name = "CurrentSkin"
+        
+        local weld = Instance.new("Weld")
+        weld.Part0 = clone
+        weld.Part1 = mesh
+        weld.Parent = clone
+        
+        mesh.Transparency = 1
+    end
+
+    local function applyGun(tool, name)
+        local original = tool:FindFirstChildOfClass("MeshPart")
+        
+        if not original then
+            return
+        end
+        
+        local skinModules = ReplicatedStorage:FindFirstChild("SkinModules")
+        
+        if not skinModules then
+            return
+        end
+        
+        local success, skinData = pcall(function()
+            return require(skinModules)
+        end)
+        
+        if not success or not skinData then
+            return
+        end
+        
+        local toolName = tool.Name
+        local info = skinData[toolName] and skinData[toolName][name]
+        
+        if not info then
+            return
+        end
+        
+        clearMesh(tool, original)
+        
+        local skinPart = info.TextureID
+        
+        if typeof(skinPart) == "Instance" then
+            local clone = skinPart:Clone()
+            clone.Parent = tool
+            clone.CFrame = original.CFrame
+            clone.Name = "CurrentSkin"
+            
+            local weld = Instance.new("Weld")
+            weld.Part0 = clone
+            weld.Part1 = original
+            weld.C0 = info.CFrame:Inverse()
+            weld.Parent = clone
+            
+            original.Transparency = 1
+        else
+            original.TextureID = skinPart
+            original.Transparency = 0
+        end
+        
+        local handle = tool:FindFirstChild("Handle")
+        
+        if not handle then
+            return
+        end
+        
+        local shootSound = handle:FindFirstChild("ShootSound")
+        
+        if shootSound then
+            local skinAssets = ReplicatedStorage:FindFirstChild("SkinAssets")
+            
+            if skinAssets then
+                local gunSounds = skinAssets:FindFirstChild("GunShootSounds")
+                
+                if gunSounds then
+                    local sounds = gunSounds:FindFirstChild(toolName)
+                    local soundObject = sounds and sounds:FindFirstChild(name)
+                    
+                    if soundObject then
+                        shootSound.SoundId = soundObject.Value
+                    end
+                end
+            end
+        end
+        
+        local skinAssets = ReplicatedStorage:FindFirstChild("SkinAssets")
+        
+        if skinAssets then
+            local particleFolder = skinAssets:FindFirstChild("GunHandleParticle")
+            
+            if particleFolder then
+                local particleSource = particleFolder:FindFirstChild(name)
+                
+                if particleSource then
+                    local particleEmitter = particleSource:FindFirstChild("ParticleEmitter")
+                    
+                    if particleEmitter then
+                        for _, existing in ipairs(handle:GetChildren()) do
+                            if existing:IsA("ParticleEmitter") then
+                                existing:Destroy()
+                            end
+                        end
+                        
+                        particleEmitter:Clone().Parent = handle
+                    end
+                end
+            end
+        end
+        
+        handle:SetAttribute("SkinName", name)
+    end
+
+    local function cleanKnife(tool)
+        local data = knifeData[tool]
+        
+        if data then
+            if data.track then
+                data.track:Stop()
+                data.track:Destroy()
+                data.track = nil
+            end
+            
+            if data.welds then
+                for _, weld in ipairs(data.welds) do
+                    if weld then
+                        weld:Destroy()
+                    end
+                end
+            end
+        end
+        
+        local mesh = tool:FindFirstChild("Default")
+        
+        if mesh then
+            local children = mesh:GetChildren()
+            
+            for i = 1, #children do
+                local v = children[i]
+                
+                if v.Name == "Handle.R" then
+                    v:Destroy()
+                elseif v:IsA("Model") then
+                    v:Destroy()
+                elseif v:IsA("BasePart") and v.Name ~= "Default" then
+                    v:Destroy()
+                end
+            end
+            
+            mesh.Transparency = 0
+        end
+        
+        knifeData[tool] = nil
+    end
+
+    local function applyKnife(character, tool, skin)
+        local config = getgenv().KnifeSkins[skin]
+        
+        if not config then
+            return
+        end
+        
+        local humanoid = character:FindFirstChild("Humanoid")
+        local rightHand = character:FindFirstChild("RightHand")
+        
+        if not humanoid or not rightHand then
+            return
+        end
+        
+        cleanKnife(tool)
+        
+        knifeData[tool] = {track=nil, welds={}}
+        
+        local data = knifeData[tool]
+        local mesh = tool:FindFirstChild("Default")
+        
+        if not mesh then
+            return
+        end
+        
+        mesh.Transparency = 1
+        
+        local skinModules = ReplicatedStorage:FindFirstChild("SkinModules")
+        
+        if not skinModules then
+            return
+        end
+        
+        local knives = skinModules:FindFirstChild("Knives")
+        
+        if not knives then
+            return
+        end
+        
+        local skinModel = knives:FindFirstChild(skin)
+        
+        if not skinModel then
+            return
+        end
+        
+        local clone = skinModel:Clone()
+        clone.Name = skin
+        
+        local handleR = Instance.new("Part")
+        handleR.Name = "Handle.R"
+        handleR.Transparency = 1
+        handleR.CanCollide = false
+        handleR.Anchored = false
+        handleR.Size = Vector3.new(0.001, 0.001, 0.001)
+        handleR.Massless = true
+        handleR.Parent = mesh
+        
+        local motor = Instance.new("Motor6D")
+        motor.Name = "Handle.R"
+        motor.Part0 = rightHand
+        motor.Part1 = handleR
+        motor.Parent = handleR
+        
+        local offset = CFrame.new(config.positionOffset) * CFrame.Angles(
+            math.rad(config.rotationOffset.X),
+            math.rad(config.rotationOffset.Y),
+            math.rad(config.rotationOffset.Z)
+        )
+        
+        if clone:IsA("Model") then
+            if not clone.PrimaryPart then
+                local children = clone:GetChildren()
+                
+                for i = 1, #children do
+                    local c = children[i]
+                    
+                    if c:IsA("BasePart") then
+                        clone.PrimaryPart = c
+                        break
+                    end
+                end
+            end
+            
+            if clone.PrimaryPart then
+                local descendants = clone:GetDescendants()
+                
+                for i = 1, #descendants do
+                    local part = descendants[i]
+                    
+                    if part:IsA("BasePart") then
+                        part.CanCollide = false
+                        part.Massless = true
+                        part.Anchored = false
+                        
+                        local weld = Instance.new("Weld")
+                        weld.Part0 = handleR
+                        weld.Part1 = part
+                        weld.C0 = offset
+                        weld.C1 = part.CFrame:ToObjectSpace(clone.PrimaryPart.CFrame)
+                        weld.Parent = part
+                        
+                        table.insert(data.welds, weld)
+                    end
+                end
+            end
+            
+            clone.Parent = mesh
+            
+        elseif clone:IsA("BasePart") then
+            clone.CanCollide = false
+            clone.Massless = true
+            clone.Anchored = false
+            
+            if clone:IsA("MeshPart") and config.textureId then
+                clone.TextureID = config.textureId
+            end
+            
+            if config.particle then
+                local skinAssets = ReplicatedStorage:FindFirstChild("SkinAssets")
+                
+                if skinAssets then
+                    local particleFolder = skinAssets:FindFirstChild("GunHandleParticle")
+                    
+                    if particleFolder then
+                        local particleSource = particleFolder:FindFirstChild(skin)
+                        
+                        if particleSource then
+                            local particleEmitter = particleSource:FindFirstChild("ParticleEmitter")
+                            
+                            if particleEmitter then
+                                particleEmitter:Clone().Parent = clone
+                            end
+                        end
+                    end
+                end
+            end
+            
+            clone.Parent = mesh
+            
+            local weld = Instance.new("Weld")
+            weld.Part0 = handleR
+            weld.Part1 = clone
+            weld.C0 = offset
+            weld.Parent = clone
+            
+            table.insert(data.welds, weld)
+        end
+        
+        local animator = humanoid:FindFirstChildOfClass("Animator")
+        
+        if not animator then
+            animator = Instance.new("Animator")
+            animator.Parent = humanoid
+        end
+        
+        if config.animationId and config.animationId ~= "" then
+            local animation = Instance.new("Animation")
+            animation.AnimationId = config.animationId
+            
+            local track = animator:LoadAnimation(animation)
+            track.Looped = false
+            track:Play()
+            
+            data.track = track
+            
+            animation:Destroy()
+            
+            track.Ended:Once(function()
+                if data.track == track then
+                    data.track = nil
+                end
+                
+                track:Destroy()
+            end)
+        end
+        
+        if config.soundId and config.soundId ~= "" then
+            if not getgenv()._currentKnifeSound or not getgenv()._currentKnifeSound.IsPlaying then
+                local sound = Instance.new("Sound")
+                sound.SoundId = config.soundId
+                sound.Parent = workspace
+                sound:Play()
+                
+                getgenv()._currentKnifeSound = sound
+                
+                sound.Ended:Connect(function()
+                    sound:Destroy()
+                    getgenv()._currentKnifeSound = nil
+                end)
+            end
+        end
+        
+        tool:SetAttribute("CurrentKnifeSkin", skin)
+    end
+
+    local function setupTool(tool)
+        if not tool:IsA("Tool") then
+            return
+        end
+        
+        if tool:GetAttribute("ScareSkinSetup") then
+            return
+        end
+        
+        tool:SetAttribute("ScareSkinSetup", true)
+        
+        tool.Equipped:Connect(function()
+            local character = tool.Parent
+            
+            if character ~= LocalPlayer.Character then
+                return
+            end
+            
+            local skin = shared.ScareSkinData[tool.Name]
+            
+            if not skin or skin == "" then
+                return
+            end
+            
+            if tool.Name == "[Knife]" then
+                applyKnife(character, tool, skin)
+            elseif tool.Name == "[Bat]" then
+                applyBat(tool, skin)
+            else
+                applyGun(tool, skin)
+            end
+        end)
+        
+        tool.Unequipped:Connect(function()
+            if tool.Name == "[Knife]" then
+                local data = knifeData[tool]
+                
+                if not data then
+                    return
+                end
+                
+                if data.welds then
+                    for _, weld in ipairs(data.welds) do
+                        if weld then
+                            weld:Destroy()
+                        end
+                    end
+                    
+                    data.welds = {}
+                end
+                
+                local mesh = tool:FindFirstChild("Default")
+                
+                if mesh then
+                    local children = mesh:GetChildren()
+                    
+                    for i = 1, #children do
+                        local v = children[i]
+                        
+                        if v.Name == "Handle.R" then
+                            v:Destroy()
+                        elseif v:IsA("Model") then
+                            v:Destroy()
+                        elseif v:IsA("MeshPart") and v.Name ~= "Default" then
+                            v:Destroy()
+                        end
+                    end
+                    
+                    mesh.Transparency = 0
+                end
+            end
+        end)
+        
+        if tool.Parent == LocalPlayer.Character then
+            local skin = shared.ScareSkinData[tool.Name]
+            
+            if skin and skin ~= "" then
+                if tool.Name == "[Knife]" then
+                    task.spawn(function()
+                        applyKnife(LocalPlayer.Character, tool, skin)
+                    end)
+                elseif tool.Name == "[Bat]" then
+                    task.spawn(function()
+                        applyBat(tool, skin)
+                    end)
+                else
+                    task.spawn(function()
+                        applyGun(tool, skin)
+                    end)
+                end
+            end
+        end
+    end
+
+    local function watchCharacter(character)
+        if not character then
+            return
+        end
+        
+        local children = character:GetChildren()
+        
+        for i = 1, #children do
+            local v = children[i]
+            
+            if v:IsA("Tool") then
+                setupTool(v)
+            end
+        end
+        
+        character.ChildAdded:Connect(function(v)
+            if v:IsA("Tool") then
+                setupTool(v)
+            end
+        end)
+    end
+
+    watchCharacter(LocalPlayer.Character)
+    LocalPlayer.CharacterAdded:Connect(watchCharacter)
+
+    local backpack = LocalPlayer:WaitForChild("Backpack")
+
+    for _, tool in ipairs(backpack:GetChildren()) do
+        if tool:IsA("Tool") then
+            setupTool(tool)
+        end
+    end
+
+    backpack.ChildAdded:Connect(function(child)
+        if child:IsA("Tool") then
+            setupTool(child)
+        end
+    end)
+end
