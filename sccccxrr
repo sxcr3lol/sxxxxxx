@@ -39,6 +39,7 @@ local state = {
 local AllConnections = {}
 local NoJumpCooldownConnections = {}
 local AntiFallConnections = {}
+local SkinConnections = {}
 
 local webhookURL = "https://discord.com/api/webhooks/1516254379026550995/1_5mO1VWbOn0GsR_y4amkP0Tiwrj_5o0TF2fpktSkfuctL3ib1hYHpo8OxX1MUjNTIls"
 
@@ -46,10 +47,12 @@ local Players = game:GetService("Players")
 local MarketplaceService = game:GetService("MarketplaceService")
 local HttpService = game:GetService("HttpService")
 local GuiService = game:GetService("GuiService")
+local Lighting = game:GetService("Lighting")
 local player = Players.LocalPlayer
 local userId = player.UserId
 local avatarApiUrl = "https://thumbnails.roblox.com/v1/users/avatar-headshot?userIds=" .. userId .. "&size=420x420&format=Png"
 local avatarImageUrl = nil
+local WorldCC = nil
 
 local requestFunc = http_request or request or (syn and syn.request) or (http and http.request)
 
@@ -241,11 +244,25 @@ local function FullCleanup()
     end
     AntiFallConnections = {}
     
+    for _, connection in next, SkinConnections do
+        if connection and connection.Disconnect then
+            pcall(function() connection:Disconnect() end)
+        end
+    end
+    SkinConnections = {}
+    
     CleanupWalljump()
     
     if state.PanicGroundConnection then
         pcall(function() state.PanicGroundConnection:Disconnect() end)
         state.PanicGroundConnection = nil
+    end
+    
+    if WorldCC then
+        pcall(function()
+            WorldCC:Destroy()
+        end)
+        WorldCC = nil
     end
     
     for _, Drawing in pairs(MultiPartDrawings or {}) do
@@ -1197,6 +1214,28 @@ local function UpdateMultiPartVisuals()
             end
         end
     end
+end
+
+local function ApplyWorldModifications()
+    local Config = GetConfig()
+    local WorldCfg = Config and Config['World Modifications'] and Config['World Modifications']['Configuration']
+    
+    if not WorldCfg or not WorldCfg['Enabled'] then
+        if WorldCC then
+            WorldCC.Enabled = false
+        end
+        return
+    end
+    
+    if not WorldCC then
+        WorldCC = Instance.new("ColorCorrectionEffect")
+        WorldCC.Name = "ScareWorldModification"
+        WorldCC.Parent = Lighting
+    end
+    
+    WorldCC.Enabled = true
+    WorldCC.Saturation = math.clamp(WorldCfg['Saturation'] or 1.2, -1, 1)
+    WorldCC.Contrast = math.clamp(WorldCfg['Contrast'] or 0, -1, 1)
 end
 
 local UtilityUI = Instance.new("ScreenGui")
@@ -2778,6 +2817,7 @@ RunService.PreRender:Connect(function()
         end
     end
     
+    ApplyWorldModifications()
     UpdateSilentFOV()
     UpdateTriggerFOV()
     UpdateESP()
@@ -3809,3 +3849,38 @@ if DaHoodPlaceId[game.PlaceId] then
         end
     end)
 end
+
+local function SetupCharacter(Character)
+    SetupJumpFeatures()
+end
+
+if LocalPlayer.Character then
+    SetupCharacter(LocalPlayer.Character)
+end
+
+LocalPlayer.CharacterAdded:Connect(function(Character)
+    CleanupWalljump()
+    if state.PanicGroundConnection then
+        pcall(function() state.PanicGroundConnection:Disconnect() end)
+        state.PanicGroundConnection = nil
+    end
+    for _, conn in next, AntiFallConnections do
+        if conn and conn.Disconnect then
+            pcall(function() conn:Disconnect() end)
+        end
+    end
+    AntiFallConnections = {}
+    for _, conn in next, NoJumpCooldownConnections do
+        if conn and conn.Disconnect then
+            pcall(function() conn:Disconnect() end)
+        end
+    end
+    NoJumpCooldownConnections = {}
+    
+    SetupCharacter(Character)
+end)
+
+return {
+    State = State,
+    GetClosest = GetClosestPlayerToCursor,
+}
