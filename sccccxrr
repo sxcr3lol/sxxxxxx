@@ -109,7 +109,6 @@ local function IsGameSupported()
         [80567999110374] = true,
         [80973874602881] = true,
         [138995385694035] = true,
-        [75159825516372] = true,
     }
     if supportedIds[placeId] then return true end
     
@@ -157,13 +156,7 @@ local function IsHoodCustomsGame()
     return false
 end
 
-local function IsNewGame()
-    local placeId = game.PlaceId
-    return placeId == 75159825516372
-end
-
 local isHoodCustoms = IsHoodCustomsGame()
-local isNewGame = IsNewGame()
 
 local function IsStealthEnabled()
     return shared.Scare and shared.Scare['Configuration']
@@ -610,13 +603,29 @@ local function IsSameCrew(Player)
 end
 
 local function IsPlayerKnocked(Player)
-    local Object = Player and Player.Character
-    local Body = Object and Object:FindFirstChild("BodyEffects")
-    return Body and Body:FindFirstChild("K.O") and Body["K.O"].Value or false
+    if not Player.Character then
+        return false
+    end
+    local BodyEffects = Player.Character:FindFirstChild("BodyEffects")
+    if BodyEffects then
+        local KO = BodyEffects:FindFirstChild("K.O")
+        local Knocked = BodyEffects:FindFirstChild("Knocked")
+        return (KO and KO.Value == true) or (Knocked and Knocked.Value == true)
+    end
+    return false
 end
 
 local function IsLocalPlayerKnocked()
-    return IsPlayerKnocked(LocalPlayer)
+    if not LocalPlayer.Character then
+        return false
+    end
+    local BodyEffects = LocalPlayer.Character:FindFirstChild("BodyEffects")
+    if BodyEffects then
+        local KO = BodyEffects:FindFirstChild("K.O")
+        local Knocked = BodyEffects:FindFirstChild("Knocked")
+        return (KO and KO.Value == true) or (Knocked and Knocked.Value == true)
+    end
+    return false
 end
 
 local function HasForcefieldOrInvis(Player)
@@ -663,21 +672,36 @@ local function CheckConditions(Player, mode)
         return true
     end
     
-    if cond['Crew'] and IsSameCrew(Player) then
-        return false
+    if cond['Crew'] then
+        if IsSameCrew(Player) then
+            return false
+        end
     end
-    if cond['Knocked'] and IsPlayerKnocked(Player) then
-        return false
+    
+    if cond['Knocked'] then
+        if IsPlayerKnocked(Player) then
+            return false
+        end
     end
-    if cond['Self-Knocked'] and IsLocalPlayerKnocked() then
-        return false
+    
+    if cond['Self-Knocked'] then
+        if IsLocalPlayerKnocked() then
+            return false
+        end
     end
-    if cond['ForceField'] and HasForcefieldOrInvis(Player) then
-        return false
+    
+    if cond['ForceField'] then
+        if HasForcefieldOrInvis(Player) then
+            return false
+        end
     end
-    if cond['Vehicle'] and IsInVehicle(Player) then
-        return false
+    
+    if cond['Vehicle'] then
+        if IsInVehicle(Player) then
+            return false
+        end
     end
+    
     if cond['Visible'] then
         local Head = Player.Character and Player.Character:FindFirstChild("Head")
         if Head and not IsTargetVisible(Head) then
@@ -700,20 +724,34 @@ local function CheckConditionsExceptVisible(Player, mode)
         return true
     end
     
-    if cond['Crew'] and IsSameCrew(Player) then
-        return false
+    if cond['Crew'] then
+        if IsSameCrew(Player) then
+            return false
+        end
     end
-    if cond['Knocked'] and IsPlayerKnocked(Player) then
-        return false
+    
+    if cond['Knocked'] then
+        if IsPlayerKnocked(Player) then
+            return false
+        end
     end
-    if cond['Self-Knocked'] and IsLocalPlayerKnocked() then
-        return false
+    
+    if cond['Self-Knocked'] then
+        if IsLocalPlayerKnocked() then
+            return false
+        end
     end
-    if cond['ForceField'] and HasForcefieldOrInvis(Player) then
-        return false
+    
+    if cond['ForceField'] then
+        if HasForcefieldOrInvis(Player) then
+            return false
+        end
     end
-    if cond['Vehicle'] and IsInVehicle(Player) then
-        return false
+    
+    if cond['Vehicle'] then
+        if IsInVehicle(Player) then
+            return false
+        end
     end
     
     return true
@@ -724,7 +762,10 @@ local function IsTargetDead(Player)
         return true
     end
     local Humanoid = Player.Character:FindFirstChildOfClass("Humanoid")
-    if not Humanoid or Humanoid.Health <= 0 then
+    if not Humanoid then
+        return true
+    end
+    if Humanoid.Health <= 0 then
         return true
     end
     return false
@@ -738,7 +779,7 @@ local function IsPlayerValid(Player, mode)
         return false
     end
     local Humanoid = Player.Character:FindFirstChildOfClass("Humanoid")
-    if not Humanoid or Humanoid.Health <= 0 then
+    if not Humanoid then
         return false
     end
     if not Player.Character:FindFirstChild("Head") then
@@ -1289,7 +1330,7 @@ for i = 1, 10 do
     PanelLabels[i] = L
 end
 
-if not isHoodCustoms and not isNewGame then
+if not isHoodCustoms then
     local GunHandler = nil
     pcall(function()
         GunHandler = require(ReplicatedStorage.Modules.GunHandler)
@@ -1555,164 +1596,14 @@ if isHoodCustoms then
     end)
 end
 
-if isNewGame then
-    local cachedTarget = nil
-    local lastMousePos = Vector2.new(0, 0)
-    local closestPointScale = 0.4
-    local bots = workspace:FindFirstChild("Bots")
-    
-    local function GetClosestPoint(target, scale)
-        local char = target
-        local closestPoint = nil
-        local shortestDistance = math.huge
-        local mouseLoc = Vector2.new(lastMousePos.X, lastMousePos.Y)
-        
-        local parts = {
-            "Head", "UpperTorso", "LowerTorso", 
-            "LeftUpperArm", "LeftLowerArm", "LeftHand",
-            "RightUpperArm", "RightLowerArm", "RightHand",
-            "LeftUpperLeg", "LeftLowerLeg", "LeftFoot",
-            "RightUpperLeg", "RightLowerLeg", "RightFoot"
-        }
-
-        for _, partName in ipairs(parts) do
-            local part = char:FindFirstChild(partName)
-            if part then
-                local size = part.Size * scale
-                local subPoints = {
-                    part.Position,
-                    (part.CFrame * CFrame.new(0, size.Y/2, 0)).Position,
-                    (part.CFrame * CFrame.new(0, -size.Y/2, 0)).Position,
-                    (part.CFrame * CFrame.new(size.X/2, 0, 0)).Position,
-                    (part.CFrame * CFrame.new(-size.X/2, 0, 0)).Position,
-                }
-
-                for _, point in ipairs(subPoints) do
-                    local pos, onScreen = Camera:WorldToViewportPoint(point)
-                    if onScreen then
-                        local distance = (Vector2.new(pos.X, pos.Y) - mouseLoc).Magnitude
-                        if distance < shortestDistance then
-                            shortestDistance = distance
-                            closestPoint = point
-                        end
-                    end
-                end
-            end
-        end
-        
-        return closestPoint or (char:FindFirstChild("HumanoidRootPart") and char.HumanoidRootPart.Position)
-    end
-    
-    local function GetClosestBot()
-        local closestBot = nil
-        local shortestDistance = math.huge
-        local mouseLoc = Vector2.new(lastMousePos.X, lastMousePos.Y)
-
-        if not bots then return nil end
-        
-        for _, bot in ipairs(bots:GetChildren()) do
-            local char = bot
-            local root = char and char:FindFirstChild("HumanoidRootPart")
-            if root then
-                local pos, onScreen = Camera:WorldToViewportPoint(root.Position)
-                if onScreen then
-                    local distance = (Vector2.new(pos.X, pos.Y) - mouseLoc).Magnitude
-                    if distance < shortestDistance then
-                        shortestDistance = distance
-                        closestBot = bot
-                    end
-                end
-            end
-        end
-        return closestBot
-    end
-    
-    local function UpdateTarget()
-        lastMousePos = UserInputService:GetMouseLocation()
-        
-        local Settings = GetConfig()
-        local SilentCfg = Settings and Settings["Silent Aimbot"]
-        if not SilentCfg or not SilentCfg["Configuration"] or not SilentCfg["Configuration"]["Enabled"] then
-            cachedTarget = nil
-            return
-        end
-        
-        local fovCfg = SilentCfg["FOV"] or {}
-        local fovEnabled = fovCfg["Configuration"] and fovCfg["Configuration"]["Enabled"]
-        local fovSize = fovCfg["Configuration"] and fovCfg["Configuration"]["Size"] or { X = 5, Y = 5, Z = 5 }
-        local viewportX, viewportY = Camera.ViewportSize.X, Camera.ViewportSize.Y
-        local camFOV = Camera.FieldOfView
-        
-        local closestBot = GetClosestBot()
-        if closestBot then
-            local targetPos = GetClosestPoint(closestBot, closestPointScale)
-            if targetPos then
-                local screenPos, onScreen = Camera:WorldToViewportPoint(targetPos)
-                if onScreen then
-                    local dist = (Vector2.new(screenPos.X, screenPos.Y) - lastMousePos).Magnitude
-                    local radius = 1e9
-                    if fovEnabled then
-                        local rootPart = closestBot:FindFirstChild("HumanoidRootPart")
-                        local rootSize = rootPart and rootPart.Size.Y or 5
-                        local scale = (rootSize * viewportY) / (screenPos.Z * 2) * 80 / camFOV
-                        local halfW = math.min((fovSize.X or 10) * scale, viewportX * 2) / 2
-                        local halfH = math.min((fovSize.Y or 10) * scale, viewportY * 2) / 2
-                        radius = math.min(halfW, halfH)
-                    end
-                    if dist <= radius then
-                        cachedTarget = targetPos
-                    else
-                        cachedTarget = nil
-                    end
-                else
-                    cachedTarget = nil
-                end
-            else
-                cachedTarget = nil
-            end
-        else
-            cachedTarget = nil
-        end
-    end
-    
-    RunService.RenderStepped:Connect(UpdateTarget)
-    
-    local GunClient = nil
-    pcall(function()
-        GunClient = require(ReplicatedStorage.Modules.GunClient)
-    end)
-    
-    if GunClient and GunClient.Shoot then
-        local OriginalShoot = GunClient.Shoot
-        GunClient.Shoot = newcclosure(function(...)
-            local args = {...}
-            local Settings = GetConfig()
-            local SilentCfg = Settings and Settings["Silent Aimbot"]
-            if SilentCfg and SilentCfg["Configuration"] and SilentCfg["Configuration"]["Enabled"] and cachedTarget then
-                LocalPlayer:SetAttribute("MousePos", cachedTarget)
-            end
-            return OriginalShoot(table.unpack(args))
-        end)
-    end
-    
-    RunService.Heartbeat:Connect(function()
-        local Settings = GetConfig()
-        local SilentCfg = Settings and Settings["Silent Aimbot"]
-        if not SilentCfg or not SilentCfg["Configuration"] or not SilentCfg["Configuration"]["Enabled"] then return end
-        local currentTool = LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Tool")
-        if cachedTarget and currentTool and currentTool:FindFirstChild("Activate") then
-            currentTool:Activate()
-        end
-    end)
-end
-
 local function ValidateTarget(mode)
     local locked = (mode == "Silent" and State.SilentTargetLocked) or (mode == "Trigger" and State.TriggerTargetLocked)
     if not locked then return end
     
     local Target = State.Targets[mode]
     
-    if Target then        if IsTargetDead(Target) or not CheckConditionsExceptVisible(Target, mode) then
+    if Target then
+        if IsTargetDead(Target) or not CheckConditionsExceptVisible(Target, mode) then
             State.Targets[mode] = nil
             if mode == "Silent" then
                 State.SilentTargetLocked = false
@@ -2692,6 +2583,10 @@ local function GetWeaponSwitchDelay()
     return WSConfig["Delay"] or 2.15
 end
 
+local function IsLeftControlHeld()
+    return UserInputService:IsKeyDown(Enum.KeyCode.LeftControl)
+end
+
 local function UpdateTriggerBot()
     local Config = GetConfig()
     local TriggerCfg = Config and Config["Trigger Bot"]
@@ -2720,6 +2615,10 @@ local function UpdateTriggerBot()
     end
     
     if not CheckConditions(Target, "Trigger Bot") then
+        return
+    end
+    
+    if IsLeftControlHeld() then
         return
     end
     
@@ -2824,6 +2723,10 @@ RunService.PreRender:Connect(function()
                         State.TriggerTargetLocked = true
                         State.Targets.Trigger = state.lockedTarget
                         state.triggerLastValidTarget = nil
+                        
+                        if IsLeftControlHeld() then
+                            return
+                        end
                         
                         local Character = LocalPlayer.Character
                         if Character then
